@@ -1,0 +1,1407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="app-repo" content="TheFennJob">
+<meta name="app-version" content="v1.9.3">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>The Fenn Job — RLCF</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#cfc8b6; touch-action:none;
+    font-family:-apple-system,system-ui,'Helvetica Neue',Arial,sans-serif; }
+  canvas { display:block; position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
+  #joystick, #stick { touch-action:none; }
+  #gl { display:none; }
+  #ui { position:fixed; inset:0; pointer-events:none; }
+  #obj { position:absolute; top:14px; left:50%; transform:translateX(-50%); text-align:center;
+    font-size:17px; font-weight:700; color:#23201a; max-width:90%; text-shadow:1px 1px 0 rgba(255,255,255,0.4); }
+  #obj small { display:block; font-size:12px; opacity:0.72; margin-top:2px; }
+  #timer { position:absolute; top:14px; right:16px; font-size:20px; font-weight:700; color:#23201a; display:none; }
+  #bar { position:absolute; top:46px; left:50%; transform:translateX(-50%); width:62%; height:12px;
+    border:2px solid #23201a; border-radius:6px; display:none; background:rgba(255,255,255,0.25); }
+  #barFill { height:100%; width:0%; background:#23201a; border-radius:3px; }
+  #wanted { position:absolute; top:70px; left:50%; transform:translateX(-50%); font-size:24px; font-weight:700;
+    color:#9e241c; letter-spacing:0.08em; display:none; }
+  .btn { pointer-events:auto; font-family:inherit; font-size:16px; font-weight:700; color:#23201a;
+    background:#ece4d0; border:2.5px solid #23201a; border-radius:14px 9px 16px 8px; padding:11px 19px;
+    cursor:pointer; box-shadow:2px 3px 0 rgba(35,32,26,0.45); }
+  .btn:active { transform:translate(1px,2px); box-shadow:1px 1px 0 rgba(35,32,26,0.45); }
+  .btn.off { color:#8d8676; border-color:#8d8676; box-shadow:none; text-decoration:line-through; }
+  #center { position:absolute; left:0; right:0; bottom:24%; display:flex; gap:11px; justify-content:center; flex-wrap:wrap; padding:0 12px; }
+  #action { position:absolute; right:24px; bottom:120px; display:none; }
+  #start { position:absolute; left:50%; bottom:11%; transform:translateX(-50%); display:none; font-size:18px; padding:14px 28px; }
+  #joystick { position:absolute; width:104px; height:104px; border-radius:50%;
+    border:3px solid rgba(35,32,26,0.4); background:rgba(255,255,255,0.14); display:none; }
+  #joystick.active { display:block; }
+  #stick { position:absolute; width:46px; height:46px; border-radius:50%; background:rgba(35,32,26,0.36); top:29px; left:29px; }
+  #subtitle { position:absolute; bottom:60px; left:0; right:0; text-align:center; font-size:20px; font-style:italic;
+    color:#23201a; padding:0 22px; opacity:0; transition:opacity .5s; text-shadow:1px 1px 0 rgba(255,255,255,0.3); }
+  #subtitle.show { opacity:1; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<canvas id="ink"></canvas>
+<div id="ui">
+  <div id="obj"></div>
+  <div id="timer">0:00</div>
+  <div id="bar"><div id="barFill"></div></div>
+  <div id="wanted">★ WANTED ★</div>
+  <div id="subtitle"></div>
+  <div id="center"></div>
+  <button id="action" class="btn">Grab</button>
+  <button id="start" class="btn">Begin the job ▸</button>
+  <div id="joystick"><div id="stick"></div></div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var VERSION="v1.9.3";
+  var glCanvas=document.getElementById("gl");
+  var inkCanvas=document.getElementById("ink");
+  var ctx=inkCanvas.getContext("2d");
+  var objEl=document.getElementById("obj"), timerEl=document.getElementById("timer");
+  var barEl=document.getElementById("bar"), barFill=document.getElementById("barFill");
+  var wantedEl=document.getElementById("wanted"), subEl=document.getElementById("subtitle");
+  var centerEl=document.getElementById("center"), actionEl=document.getElementById("action");
+  var startEl=document.getElementById("start");
+  var joystickEl=document.getElementById("joystick"), stickEl=document.getElementById("stick");
+
+  var W=0,H=0,DPR=1, gl=null;
+  var sketchMode=false;            // false = Normal (clean 3D), true = Sketchbook (a-ha)
+  var ptr={x:0,y:0}, beginPressed=false, downBoost=false;
+  function resize(){
+    DPR=Math.min(window.devicePixelRatio||1,2);
+    W=window.innerWidth; H=window.innerHeight;
+    [glCanvas,inkCanvas].forEach(function(c){ c.width=W*DPR; c.height=H*DPR; c.style.width=W+"px"; c.style.height=H+"px"; });
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    if(gl) gl.viewport(0,0,glCanvas.width,glCanvas.height);
+  }
+  window.addEventListener("resize",resize);
+
+  // ============================================================ 2D PENCIL ENGINE
+  var INK="#23201a", INK2="#46402f", GRAPH="#5b5443", RED="#9e241c", GOLD="#a98a3c", PAPER="#e7e0cd";
+  var GREEN="#6f8a4e", GREEN_DK="#506634", GREEN_LT="#86a064", BLUE="#2a47b8", BLUE_DK="#1c2f7a", BLUE_LT="#5f78d6", ROOF="#cfc8b4", ROOF_DK="#bdb59f";
+  var GRASS="#b3bd99", GRASS_DK="#9aa67e", GRASS_LT="#c4ccac";   // muted sage to match the museum map
+  var boil=0, boilAcc=0, boilT=0;
+  function hash(x,y,s){ var v=Math.sin(x*12.9898+y*78.233+s*37.71)*43758.5453; return (v-Math.floor(v))*2-1; }
+  function jit(x,y,salt,amp){ return hash(x*0.7,y*0.7,boil+salt)*(amp||1.6)*(sketchMode?1:0.22); }
+  var Sk={};
+  Sk.begin=function(w,col){ ctx.strokeStyle=col||INK; ctx.lineWidth=w||2.0; ctx.lineCap="round"; ctx.lineJoin="round"; };
+  // pencil line = two faint overlaid jittered passes for a graphite feel
+  function rawline(x1,y1,x2,y2,salt,jitAmp){
+    var dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy),seg=Math.max(2,Math.floor(len/30));
+    var nx=-dy/(len||1), ny=dx/(len||1);
+    ctx.beginPath();
+    for(var i=0;i<=seg;i++){ var t=i/seg,x=x1+dx*t,y=y1+dy*t;
+      if(i>0&&i<seg){ var o=jit(x,y,salt+i,jitAmp); x+=nx*o; y+=ny*o; }
+      if(i===0)ctx.moveTo(x,y); else ctx.lineTo(x,y); }
+    ctx.stroke();
+  }
+  Sk.line=function(x1,y1,x2,y2,salt){
+    salt=salt||0;
+    var w=ctx.lineWidth, col=ctx.strokeStyle;
+    ctx.globalAlpha=0.5; ctx.lineWidth=w*1.4; rawline(x1,y1,x2,y2,salt,2.2);
+    ctx.globalAlpha=0.9; ctx.lineWidth=w*0.8; rawline(x1,y1,x2,y2,salt+50,1.2);
+    ctx.globalAlpha=1; ctx.lineWidth=w; ctx.strokeStyle=col;
+  };
+  Sk.poly=function(pts,close,salt){ for(var i=0;i<pts.length-1;i++) Sk.line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1],(salt||0)+i);
+    if(close) Sk.line(pts[pts.length-1][0],pts[pts.length-1][1],pts[0][0],pts[0][1],(salt||0)+91); };
+  Sk.rect=function(x,y,w,h,salt){ Sk.poly([[x,y],[x+w,y],[x+w,y+h],[x,y+h]],true,salt); };
+  Sk.circle=function(cx,cy,r,salt){ salt=salt||0; var seg=Math.max(10,Math.floor(r/3));
+    ctx.beginPath();
+    for(var i=0;i<=seg;i++){ var a=i/seg*Math.PI*2, rr=r+jit(cx+Math.cos(a)*r,cy+Math.sin(a)*r,salt,1.5);
+      var x=cx+Math.cos(a)*rr,y=cy+Math.sin(a)*rr; if(i===0)ctx.moveTo(x,y); else ctx.lineTo(x,y);}
+    ctx.closePath(); ctx.stroke(); };
+  Sk.fillPoly=function(pts,col,salt){ ctx.fillStyle=col; ctx.beginPath();
+    for(var i=0;i<pts.length;i++){ var x=pts[i][0]+jit(pts[i][0],pts[i][1],(salt||0)+i,1.0),
+      y=pts[i][1]+jit(pts[i][1],pts[i][0],(salt||0)+i+5,1.0); if(i===0)ctx.moveTo(x,y); else ctx.lineTo(x,y);}
+    ctx.closePath(); ctx.fill(); };
+  Sk.fillCircle=function(cx,cy,r,col,salt){ ctx.fillStyle=col; ctx.beginPath(); var seg=Math.max(10,Math.floor(r/3));
+    for(var i=0;i<=seg;i++){ var a=i/seg*Math.PI*2,rr=r+jit(cx,cy,(salt||0)+i,0.9); var x=cx+Math.cos(a)*rr,y=cy+Math.sin(a)*rr;
+      if(i===0)ctx.moveTo(x,y); else ctx.lineTo(x,y);} ctx.closePath(); ctx.fill(); };
+  // cross-hatch shading inside a rect (graphite). dens 0..1
+  Sk.hatch=function(x,y,w,h,dens,salt){
+    ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,h); ctx.clip();
+    Sk.begin(1.0,GRAPH); ctx.globalAlpha=0.5;
+    var gap=Math.max(4,11-dens*8);
+    for(var d=-h; d<w; d+=gap) rawline(x+d,y+h,x+d+h,y,(salt||0)+d,1.4);
+    if(dens>0.55){ for(d=-h; d<w; d+=gap) rawline(x+d+h,y+h,x+d,y,(salt||0)+d+7,1.4); }
+    ctx.globalAlpha=1; ctx.restore();
+  };
+  function paper(full){
+    if(full){ ctx.fillStyle=PAPER; ctx.fillRect(0,0,W,H); }
+    else { ctx.clearRect(0,0,W,H); }
+    if(!sketchMode) return;                 // clean paper in Normal mode (no grain)
+    ctx.fillStyle="rgba(70,64,47,0.05)";
+    for(var i=0;i<46;i++){ var x=(hash(i,1,7)*0.5+0.5)*W, y=(hash(i,2,9)*0.5+0.5)*H; ctx.fillRect(x,y,2,2); }
+  }
+  function frameBorder(){ Sk.begin(3.0,INK); Sk.rect(14,14,W-28,H-28,500); }
+  function vignette(){ var g=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35,W/2,H/2,Math.max(W,H)*0.7);
+    g.addColorStop(0,"rgba(0,0,0,0)"); g.addColorStop(1,"rgba(40,36,26,0.30)"); ctx.fillStyle=g; ctx.fillRect(0,0,W,H); }
+  var flash={a:0,col:"#fff"};
+  function doFlash(c){ flash.a=1; flash.col=c||"#fff"; }
+  function drawFlash(){ if(flash.a>0.01){ ctx.globalAlpha=flash.a; ctx.fillStyle=flash.col; ctx.fillRect(0,0,W,H); ctx.globalAlpha=1; } }
+
+  // ============================================================ INPUT
+  var keys={}, tap=false, joyEnabled=false;
+  window.addEventListener("keydown",function(e){ var k=e.key.toLowerCase(); keys[k]=true;
+    if(["arrowup","arrowdown","arrowleft","arrowright"," "].indexOf(k)>=0)e.preventDefault(); });
+  window.addEventListener("keyup",function(e){ keys[e.key.toLowerCase()]=false; });
+  function keyVec(){ var x=0,y=0; if(keys["arrowup"]||keys["w"])y-=1; if(keys["arrowdown"]||keys["s"])y+=1;
+    if(keys["arrowleft"]||keys["a"])x-=1; if(keys["arrowright"]||keys["d"])x+=1; return {x:x,y:y}; }
+  var dragging=false,dStart={x:0,y:0},tVec={x:0,y:0},JR=46;
+  function isUI(t){ return t&&t.classList&&t.classList.contains("btn"); }
+  function showJoy(x,y){ joystickEl.style.left=(x-52)+"px"; joystickEl.style.top=(y-52)+"px"; joystickEl.classList.add("active"); }
+  function hideJoy(){ joystickEl.classList.remove("active"); stickEl.style.left="29px"; stickEl.style.top="29px"; tVec={x:0,y:0}; }
+  function pd(e){ var p=e.touches?e.touches[0]:e; ptr.x=p.clientX; ptr.y=p.clientY;
+    if(puz){ if(!isUI(e.target)) puz.hit(p.clientX,p.clientY); return; }
+    tap=true; if(isUI(e.target))return; if(joyEnabled){ dragging=true; dStart={x:p.clientX,y:p.clientY}; showJoy(p.clientX,p.clientY);} }
+  function pm(e){ if(!dragging)return; var p=e.touches?e.touches[0]:e; var dx=p.clientX-dStart.x,dy=p.clientY-dStart.y;
+    var d=Math.min(Math.hypot(dx,dy),JR),a=Math.atan2(dy,dx),sx=Math.cos(a)*d,sy=Math.sin(a)*d;
+    stickEl.style.left=(52+sx-23)+"px"; stickEl.style.top=(52+sy-23)+"px"; tVec.x=sx/JR; tVec.y=sy/JR; }
+  function puUp(){ dragging=false; hideJoy(); }
+  window.addEventListener("mousedown",pd); window.addEventListener("mousemove",pm); window.addEventListener("mouseup",puUp);
+  window.addEventListener("touchstart",function(e){ if(joyEnabled&&!isUI(e.target)&&e.cancelable)e.preventDefault(); pd(e);},{passive:false});
+  window.addEventListener("touchmove",function(e){ if(dragging&&e.cancelable)e.preventDefault(); pm(e);},{passive:false});
+  window.addEventListener("touchend",puUp); window.addEventListener("touchcancel",puUp);
+  function inputVec(){ var kv=keyVec(); var ix=kv.x!==0?kv.x:tVec.x, iy=kv.y!==0?kv.y:tVec.y;
+    if(downBoost){ iy = iy>0 ? iy*2.8 : iy*1.8; }   // title option: much more sensitive vertical (esp. down)
+    var l=Math.hypot(ix,iy); if(l>1){ix/=l;iy/=l;} return {x:ix,y:iy,len:Math.min(1,l)}; }
+
+  // ============================================================ HUD helpers
+  function setObj(m,s){ objEl.innerHTML=m+(s?("<small>"+s+"</small>"):""); }
+  function setSub(t){ if(t){subEl.textContent=t; subEl.classList.add("show");} else subEl.classList.remove("show"); }
+  function clearButtons(){ centerEl.innerHTML=""; }
+  function addButton(label,cb){ var b=document.createElement("button"); b.className="btn"; b.textContent=label;
+    b.addEventListener("click",function(){ cb(b); }); centerEl.appendChild(b); return b; }
+
+  // ============================================================ mat math (column-major)
+  function m4id(){return new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);}
+  function m4mul(a,b){ var o=new Float32Array(16);
+    var a00=a[0],a01=a[1],a02=a[2],a03=a[3],a10=a[4],a11=a[5],a12=a[6],a13=a[7],
+        a20=a[8],a21=a[9],a22=a[10],a23=a[11],a30=a[12],a31=a[13],a32=a[14],a33=a[15];
+    for(var i=0;i<4;i++){ var b0=b[i*4],b1=b[i*4+1],b2=b[i*4+2],b3=b[i*4+3];
+      o[i*4]=b0*a00+b1*a10+b2*a20+b3*a30; o[i*4+1]=b0*a01+b1*a11+b2*a21+b3*a31;
+      o[i*4+2]=b0*a02+b1*a12+b2*a22+b3*a32; o[i*4+3]=b0*a03+b1*a13+b2*a23+b3*a33; } return o; }
+  function m4mulAll(){ var r=arguments[0]; for(var i=1;i<arguments.length;i++) r=m4mul(r,arguments[i]); return r; }
+  function T(x,y,z){var m=m4id();m[12]=x;m[13]=y;m[14]=z;return m;}
+  function Sc(x,y,z){var m=m4id();m[0]=x;m[5]=y;m[10]=z;return m;}
+  function Rx(r){var c=Math.cos(r),s=Math.sin(r),m=m4id();m[5]=c;m[6]=s;m[9]=-s;m[10]=c;return m;}
+  function Ry(r){var c=Math.cos(r),s=Math.sin(r),m=m4id();m[0]=c;m[2]=-s;m[8]=s;m[10]=c;return m;}
+  function Rz(r){var c=Math.cos(r),s=Math.sin(r),m=m4id();m[0]=c;m[1]=s;m[4]=-s;m[5]=c;return m;}
+  function perspective(fovy,aspect,near,far){ var f=1/Math.tan(fovy/2),nf=1/(near-far),o=new Float32Array(16);
+    o[0]=f/aspect;o[5]=f;o[10]=(far+near)*nf;o[11]=-1;o[14]=2*far*near*nf;return o; }
+  function lookAt(eye,c,up){ var ex=eye[0],ey=eye[1],ez=eye[2];
+    var z0=ex-c[0],z1=ey-c[1],z2=ez-c[2],l=1/Math.hypot(z0,z1,z2); z0*=l;z1*=l;z2*=l;
+    var x0=up[1]*z2-up[2]*z1,x1=up[2]*z0-up[0]*z2,x2=up[0]*z1-up[1]*z0; l=Math.hypot(x0,x1,x2);
+    if(l){l=1/l;x0*=l;x1*=l;x2*=l;}else{x0=x1=x2=0;}
+    var y0=z1*x2-z2*x1,y1=z2*x0-z0*x2,y2=z0*x1-z1*x0; var o=new Float32Array(16);
+    o[0]=x0;o[1]=y0;o[2]=z0;o[3]=0;o[4]=x1;o[5]=y1;o[6]=z1;o[7]=0;o[8]=x2;o[9]=y2;o[10]=z2;o[11]=0;
+    o[12]=-(x0*ex+x1*ey+x2*ez);o[13]=-(y0*ex+y1*ey+y2*ez);o[14]=-(z0*ex+z1*ey+z2*ez);o[15]=1; return o; }
+  function normalMat3(a){ var o=new Float32Array(9);
+    var a00=a[0],a01=a[1],a02=a[2],a10=a[4],a11=a[5],a12=a[6],a20=a[8],a21=a[9],a22=a[10],
+        a30=a[12],a31=a[13],a32=a[14],a03=a[3],a13=a[7],a23=a[11],a33=a[15];
+    var b00=a00*a11-a01*a10,b01=a00*a12-a02*a10,b02=a00*a13-a03*a10,b03=a01*a12-a02*a11,b04=a01*a13-a03*a11,
+        b05=a02*a13-a03*a12,b06=a20*a31-a21*a30,b07=a20*a32-a22*a30,b08=a20*a33-a23*a30,b09=a21*a32-a22*a31,
+        b10=a21*a33-a23*a31,b11=a22*a33-a23*a32;
+    var det=b00*b11-b01*b10+b02*b09+b03*b08-b04*b07+b05*b06; if(!det){o[0]=o[4]=o[8]=1;return o;} det=1/det;
+    o[0]=(a11*b11-a12*b10+a13*b09)*det;o[1]=(a12*b08-a10*b11-a13*b07)*det;o[2]=(a10*b10-a11*b08+a13*b06)*det;
+    o[3]=(a02*b10-a01*b11-a03*b09)*det;o[4]=(a00*b11-a02*b08+a03*b07)*det;o[5]=(a01*b08-a00*b10-a03*b06)*det;
+    o[6]=(a31*b05-a32*b04+a33*b03)*det;o[7]=(a32*b02-a30*b05-a33*b01)*det;o[8]=(a30*b04-a31*b02+a33*b00)*det; return o; }
+
+  // ============================================================ WebGL init + sketch shader
+  var prog, A={}, U={}, M={}, glReady=false;
+  var VERT=[
+    "attribute vec3 aPosition; attribute vec3 aNormal;",
+    "uniform mat4 uMVP; uniform mat4 uModel; uniform mat3 uNormalMat;",
+    "varying vec3 vN; varying vec3 vW;",
+    "void main(){ vec4 wp=uModel*vec4(aPosition,1.0); vW=wp.xyz; vN=normalize(uNormalMat*aNormal);",
+    "  gl_Position=uMVP*vec4(aPosition,1.0); }"].join("\n");
+  var FRAG=[
+    "precision mediump float;",
+    "varying vec3 vN; varying vec3 vW;",
+    "uniform vec3 uColor; uniform float uMode;",            // uMode 1 = flat accent
+    "uniform vec3 uLightDir; uniform vec3 uCamPos;",
+    "uniform vec3 uPaper; uniform vec3 uInk; uniform vec3 uFog; uniform float uFogDensity; uniform float uSketch;",
+    "void main(){",
+    "  if(uMode>0.5){ gl_FragColor=vec4(uColor,1.0); return; }",
+    "  vec3 N=normalize(vN); float d=max(dot(N,normalize(uLightDir)),0.0);",
+    "  float base=(uColor.r+uColor.g+uColor.b)/3.0;",
+    "  float lum=(0.30+0.70*d)*mix(0.55,1.18,base);",
+    "  vec3 V=normalize(uCamPos-vW); float rim=1.0-max(dot(N,V),0.0);",
+    "  vec3 col;",
+    "  if(uSketch>0.5){",
+    "    vec2 fc=gl_FragCoord.xy; float ink=0.0;",
+    "    if(lum<0.84) ink=max(ink, step(0.80, fract((fc.x*0.6+fc.y*0.8)*0.085)));",
+    "    if(lum<0.58) ink=max(ink, step(0.80, fract((fc.x*0.8-fc.y*0.6)*0.085)));",
+    "    if(lum<0.36) ink=max(ink, step(0.82, fract(fc.x*0.12)));",
+    "    if(lum<0.19) ink=max(ink, step(0.82, fract(fc.y*0.12)));",
+    "    col=mix(uPaper, uInk, ink);",
+    "    col=mix(col, uInk, (1.0-clamp(lum,0.0,1.0))*0.22);",
+    "    col=mix(col, uInk, smoothstep(0.45,1.0,rim)*0.55);",
+    "  } else {",                                            // clean cel/toon shading (Normal)
+    "    float q=floor(clamp(lum,0.0,1.1)*4.0)/4.0 + 0.16;",
+    "    col=uColor*clamp(q,0.22,1.25);",
+    "    col=mix(col, vec3(1.0), smoothstep(0.62,1.0,rim)*0.16);",   // soft rim light
+    "    col=mix(col, uInk, smoothstep(0.82,1.0,rim)*0.35);",        // thin dark contour
+    "  }",
+    "  float dist=length(uCamPos-vW); float f=clamp(1.0-exp(-uFogDensity*dist),0.0,1.0);",
+    "  col=mix(col,uFog,f); gl_FragColor=vec4(col,1.0); }"].join("\n");
+  function compile(t,s){ var sh=gl.createShader(t); gl.shaderSource(sh,s); gl.compileShader(sh);
+    if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS)){ console.error(gl.getShaderInfoLog(sh)); return null;} return sh; }
+  function initGL(){
+    gl=glCanvas.getContext("webgl")||glCanvas.getContext("experimental-webgl"); if(!gl) return false;
+    var vs=compile(gl.VERTEX_SHADER,VERT), fs=compile(gl.FRAGMENT_SHADER,FRAG); if(!vs||!fs) return false;
+    prog=gl.createProgram(); gl.attachShader(prog,vs); gl.attachShader(prog,fs); gl.linkProgram(prog);
+    if(!gl.getProgramParameter(prog,gl.LINK_STATUS)){ console.error(gl.getProgramInfoLog(prog)); return false; }
+    gl.useProgram(prog);
+    A.pos=gl.getAttribLocation(prog,"aPosition"); A.norm=gl.getAttribLocation(prog,"aNormal");
+    ["uMVP","uModel","uNormalMat","uColor","uMode","uLightDir","uCamPos","uPaper","uInk","uFog","uFogDensity","uSketch"].forEach(function(n){U[n]=gl.getUniformLocation(prog,n);});
+    gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL);
+    M.box=makeBox(); M.cyl=makeCyl(16); M.sph=makeSph(10,14); M.cone=makeCone(10); M.shield=makeShield();
+    return true;
+  }
+  function mkMesh(p,n,idx){ var pb=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,pb); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(p),gl.STATIC_DRAW);
+    var nb=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,nb); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(n),gl.STATIC_DRAW);
+    var ib=gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(idx),gl.STATIC_DRAW);
+    return {p:pb,n:nb,i:ib,c:idx.length}; }
+  function makeBox(){ var p=[],n=[],idx=[]; var F=[
+    {n:[0,0,1],v:[[-.5,-.5,.5],[.5,-.5,.5],[.5,.5,.5],[-.5,.5,.5]]},{n:[0,0,-1],v:[[.5,-.5,-.5],[-.5,-.5,-.5],[-.5,.5,-.5],[.5,.5,-.5]]},
+    {n:[1,0,0],v:[[.5,-.5,.5],[.5,-.5,-.5],[.5,.5,-.5],[.5,.5,.5]]},{n:[-1,0,0],v:[[-.5,-.5,-.5],[-.5,-.5,.5],[-.5,.5,.5],[-.5,.5,-.5]]},
+    {n:[0,1,0],v:[[-.5,.5,.5],[.5,.5,.5],[.5,.5,-.5],[-.5,.5,-.5]]},{n:[0,-1,0],v:[[-.5,-.5,-.5],[.5,-.5,-.5],[.5,-.5,.5],[-.5,-.5,.5]]}];
+    F.forEach(function(f,fi){ f.v.forEach(function(v){p.push(v[0],v[1],v[2]);n.push(f.n[0],f.n[1],f.n[2]);}); var b=fi*4; idx.push(b,b+1,b+2,b,b+2,b+3); });
+    return mkMesh(p,n,idx); }
+  function makeSph(la,lo){ var p=[],n=[],idx=[];
+    for(var i=0;i<=la;i++){ var th=i*Math.PI/la,st=Math.sin(th),ct=Math.cos(th);
+      for(var j=0;j<=lo;j++){ var ph=j*2*Math.PI/lo,sp=Math.sin(ph),cp=Math.cos(ph); var nx=st*cp,ny=ct,nz=st*sp;
+        p.push(nx*0.5,ny*0.5,nz*0.5); n.push(nx,ny,nz);} }
+    for(i=0;i<la;i++)for(j=0;j<lo;j++){ var a=i*(lo+1)+j,b=a+lo+1; idx.push(a,b,a+1,b,b+1,a+1);} return mkMesh(p,n,idx); }
+  function makeCyl(seg){ var p=[],n=[],idx=[];
+    for(var i=0;i<=seg;i++){ var a=i/seg*Math.PI*2,cx=Math.cos(a),cz=Math.sin(a);
+      p.push(cx*0.5,-0.5,cz*0.5);n.push(cx,0,cz); p.push(cx*0.5,0.5,cz*0.5);n.push(cx,0,cz); }
+    for(i=0;i<seg;i++){var b=i*2;idx.push(b,b+1,b+2,b+1,b+3,b+2);}
+    var tc=p.length/3;p.push(0,0.5,0);n.push(0,1,0);var ts=p.length/3;
+    for(i=0;i<=seg;i++){var t=i/seg*Math.PI*2;p.push(Math.cos(t)*0.5,0.5,Math.sin(t)*0.5);n.push(0,1,0);}
+    for(i=0;i<seg;i++)idx.push(tc,ts+i,ts+i+1);
+    var bc=p.length/3;p.push(0,-0.5,0);n.push(0,-1,0);var bs=p.length/3;
+    for(i=0;i<=seg;i++){var u=i/seg*Math.PI*2;p.push(Math.cos(u)*0.5,-0.5,Math.sin(u)*0.5);n.push(0,-1,0);}
+    for(i=0;i<seg;i++)idx.push(bc,bs+i+1,bs+i); return mkMesh(p,n,idx); }
+  function makeShield(){
+    // heraldic "heater" shield outline (unit-ish, x:-0.55..0.55, y:-0.80..0.74), clockwise
+    var out=[[0,0.74],[0.55,0.58],[0.55,-0.10],[0.50,-0.35],[0.38,-0.55],[0.20,-0.71],[0,-0.80],
+             [-0.20,-0.71],[-0.38,-0.55],[-0.50,-0.35],[-0.55,-0.10],[-0.55,0.58]];
+    var th=0.5, p=[],n=[],idx=[];
+    var cx=0,cy=0,i; for(i=0;i<out.length;i++){cx+=out[i][0];cy+=out[i][1];} cx/=out.length; cy/=out.length;
+    function face(zz,nz){ var base=p.length/3; p.push(cx,cy,zz); n.push(0,0,nz);
+      for(var k=0;k<out.length;k++){ p.push(out[k][0],out[k][1],zz); n.push(0,0,nz); }
+      for(k=0;k<out.length;k++){ var a=base+1+k, b=base+1+((k+1)%out.length); if(nz>0) idx.push(base,a,b); else idx.push(base,b,a); } }
+    face(th,1); face(-th,-1);
+    for(i=0;i<out.length;i++){ var a=out[i], b=out[(i+1)%out.length], ex=b[0]-a[0], ey=b[1]-a[1], len=Math.hypot(ex,ey)||1, nx=ey/len, ny=-ex/len, base=p.length/3;
+      p.push(a[0],a[1],th, b[0],b[1],th, b[0],b[1],-th, a[0],a[1],-th);
+      n.push(nx,ny,0, nx,ny,0, nx,ny,0, nx,ny,0); idx.push(base,base+1,base+2, base,base+2,base+3); }
+    return mkMesh(p,n,idx);
+  }
+  function makeCone(seg){ var p=[],n=[],idx=[];
+    for(var i=0;i<seg;i++){ var a0=i/seg*Math.PI*2,a1=(i+1)/seg*Math.PI*2;
+      var nx=Math.cos((a0+a1)/2),nz=Math.sin((a0+a1)/2); var b=p.length/3;
+      p.push(Math.cos(a0)*.5,0,Math.sin(a0)*.5, Math.cos(a1)*.5,0,Math.sin(a1)*.5, 0,1,0);
+      n.push(nx,.5,nz,nx,.5,nz,nx,.5,nz); idx.push(b,b+1,b+2); }
+    var c=p.length/3;p.push(0,0,0);n.push(0,-1,0);
+    for(i=0;i<seg;i++){var b0=i/seg*Math.PI*2,b1=(i+1)/seg*Math.PI*2,bx=p.length/3;
+      p.push(Math.cos(b0)*.5,0,Math.sin(b0)*.5,Math.cos(b1)*.5,0,Math.sin(b1)*.5);n.push(0,-1,0,0,-1,0);idx.push(c,bx+1,bx);}
+    return mkMesh(p,n,idx); }
+
+  // ============================================================ GL draw
+  var viewProj=m4id(), camPos=[0,0,0];
+  var PAPER3=[0.905,0.878,0.804], INK3=[0.137,0.125,0.102], FOG3=[0.78,0.76,0.70], LIGHT3=[0.5,1.0,0.4];
+  function glFrameSetup(eye,center,fov,fog){
+    gl.clearColor(PAPER3[0],PAPER3[1],PAPER3[2],1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    var aspect=glCanvas.width/glCanvas.height;
+    var proj=perspective((fov||55)*Math.PI/180,aspect,0.1,240);
+    var view=lookAt(eye,center,[0,1,0]); viewProj=m4mul(proj,view); camPos=eye;
+    gl.uniform3f(U.uLightDir,LIGHT3[0],LIGHT3[1],LIGHT3[2]);
+    gl.uniform3f(U.uCamPos,eye[0],eye[1],eye[2]);
+    gl.uniform3f(U.uPaper,PAPER3[0],PAPER3[1],PAPER3[2]);
+    gl.uniform3f(U.uInk,INK3[0],INK3[1],INK3[2]);
+    gl.uniform3f(U.uFog,FOG3[0],FOG3[1],FOG3[2]);
+    gl.uniform1f(U.uFogDensity,fog||0.016);
+    gl.uniform1f(U.uSketch,sketchMode?1:0);
+  }
+  function drawMesh(mesh,model,color,mode){
+    gl.uniformMatrix4fv(U.uMVP,false,m4mul(viewProj,model));
+    gl.uniformMatrix4fv(U.uModel,false,model);
+    gl.uniformMatrix3fv(U.uNormalMat,false,normalMat3(model));
+    gl.uniform3f(U.uColor,color[0],color[1],color[2]);
+    gl.uniform1f(U.uMode,mode||0);
+    gl.bindBuffer(gl.ARRAY_BUFFER,mesh.p); gl.enableVertexAttribArray(A.pos); gl.vertexAttribPointer(A.pos,3,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ARRAY_BUFFER,mesh.n); gl.enableVertexAttribArray(A.norm); gl.vertexAttribPointer(A.norm,3,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,mesh.i); gl.drawElements(gl.TRIANGLES,mesh.c,gl.UNSIGNED_SHORT,0);
+  }
+  function bx(x,y,z,sx,sy,sz,col,rx,ry,rz,mode){ var m=T(x,y,z); if(rz)m=m4mul(m,Rz(rz)); if(ry)m=m4mul(m,Ry(ry)); if(rx)m=m4mul(m,Rx(rx)); m=m4mul(m,Sc(sx,sy,sz)); drawMesh(M.box,m,col,mode); }
+  function sp(x,y,z,sx,sy,sz,col,rx,ry,rz){ var m=T(x,y,z); if(rz)m=m4mul(m,Rz(rz)); if(rx)m=m4mul(m,Rx(rx)); m=m4mul(m,Sc(sx,sy,sz)); drawMesh(M.sph,m,col); }
+  function cy(x,y,z,sx,sy,sz,col,rx,ry,rz){ var m=T(x,y,z); if(rz)m=m4mul(m,Rz(rz)); if(rx)m=m4mul(m,Rx(rx)); m=m4mul(m,Sc(sx,sy,sz)); drawMesh(M.cyl,m,col); }
+  function co(x,y,z,r,h,col){ drawMesh(M.cone,m4mul(T(x,y,z),Sc(r*2,h,r*2)),col); }
+  function shld(x,y,z,sx,sy,sz,col,rx,ry,rz,mode){ var m=T(x,y,z); if(rz)m=m4mul(m,Rz(rz)); if(ry)m=m4mul(m,Ry(ry)); if(rx)m=m4mul(m,Rx(rx)); m=m4mul(m,Sc(sx,sy,sz)); drawMesh(M.shield,m,col,mode); }
+  // graphite tones (monochrome) + accents
+  var G={ stone:[0.72,0.72,0.70], stoneDk:[0.5,0.5,0.49], stoneLt:[0.86,0.86,0.84],
+    fig:[0.62,0.6,0.55], figDk:[0.44,0.42,0.38], figLt:[0.8,0.78,0.72],
+    gold:[0.78,0.66,0.32], shield:[0.55,0.54,0.5], ground:[0.66,0.71,0.55], path:[0.83,0.82,0.76],
+    pine:[0.45,0.5,0.5], mtn:[0.6,0.62,0.66], body:[0.34,0.32,0.28], skin:[0.82,0.74,0.6], hair:[0.4,0.34,0.26],
+    red:[0.62,0.14,0.11], wall:[0.74,0.73,0.69], floor:[0.82,0.81,0.77],
+    warm:[0.80,0.62,0.26], flame:[0.88,0.5,0.16], flameLt:[0.95,0.78,0.34],
+    bronze:[0.46,0.34,0.18], bronzeDk:[0.32,0.23,0.12], bronzeLt:[0.66,0.5,0.28],
+    marble:[0.88,0.87,0.83], marbleDk:[0.77,0.76,0.72], glass:[0.84,0.88,0.89],
+    haze:[0.71,0.73,0.78], hazeDk:[0.64,0.66,0.72], domeRed:[0.70,0.26,0.20] };
+
+  // ============================================================ 3D SCENES
+  var security={laser:true,alarm:true,barrier:true};
+  var crownTaken=false;
+  var scene3d={ id:null, px:0, pz:0, phase:0, moving:0, t:0, barrierY:0, carX:0, carZ:0, done:false };
+
+  // ---- shared statue (graphite winged king) ----
+  function drawStatue(z){
+    bx(0,0.5,z,3.4,1.0,3.4,G.stoneDk); bx(0,1.5,z,2.8,1.0,2.8,G.stone); bx(0,2.25,z,3.0,0.5,3.0,G.stoneLt);
+    var t=2.5, BZ=G.bronze, BZD=G.bronzeDk, BZL=G.bronzeLt;
+    cy(-0.5,t+1.2,z+0.1,0.66,2.4,0.72,BZD); cy(0.5,t+1.2,z+0.1,0.66,2.4,0.72,BZ);
+    sp(-0.5,t+0.2,z+0.3,0.8,0.55,0.95,BZD); sp(0.5,t+0.2,z+0.3,0.8,0.55,0.95,BZD);
+    var ty=t+3.4; cy(0,ty,z,1.8,2.1,1.15,BZ); sp(0,ty+0.55,z,1.78,1.3,1.12,BZ);
+    sp(0,ty+0.2,z+0.45,1.0,1.2,0.4,BZL); cy(0,ty-1.0,z,1.85,0.34,1.2,BZD); sp(0,ty-1.5,z,1.5,1.0,1.05,BZ);
+    sp(-0.95,ty+0.85,z,0.8,0.7,0.95,BZL); sp(0.95,ty+0.85,z,0.8,0.7,0.95,BZL);
+    var hy=ty+1.6; sp(0,hy,z,0.9,1.0,0.9,BZ); sp(0,hy-0.32,z+0.34,0.7,0.62,0.5,BZD);
+    cy(0,hy+0.5,z,1.04,0.32,1.04,G.gold); co(-0.34,hy+0.6,z,0.13,0.42,G.gold); co(0,hy+0.64,z,0.13,0.5,G.gold); co(0.34,hy+0.6,z,0.13,0.42,G.gold);
+    var sh=ty+0.8; cy(-1.05,sh+0.4,z,0.46,1.7,0.46,BZ,0,0,0.5); cy(-1.5,sh+1.5,z,0.4,1.6,0.4,BZL,0,0,0.15);
+    sp(-1.5,sh+2.3,z,0.38,0.38,0.38,BZ); bx(-1.62,sh+4.6,z,0.15,4.4,0.16,BZL); bx(-1.62,sh+2.55,z,1.15,0.22,0.3,BZD);
+    cy(1.05,sh-0.2,z,0.48,1.9,0.48,BZ,0,0,-0.18); sp(1.25,t+3.4,z+0.2,0.4,0.4,0.4,BZ);
+    shld(1.75,t+1.87,z+0.30,1.98,2.52,0.30,BZD,0,0,-0.12);   // bronze rim (behind)
+    shld(1.75,t+1.87,z+0.40,1.78,2.30,0.34,G.shield,0,0,-0.12); // shield face
+    bx(1.75,t+1.95,z+0.62,0.18,2.0,0.12,BZD,0,0,-0.12);     // vertical band charge
+    sp(1.75,t+1.95,z+0.66,0.34,0.34,0.22,BZL,0,0,-0.12);    // central boss
+    // wings — symmetric pair, spread up & back behind the shoulders (as on the monument)
+    sp(-0.95,ty+2.7,z-0.5 ,0.26,4.3,1.75,BZ ,0,0, 0.52);
+    sp(-1.55,ty+3.8,z-0.55,0.20,3.0,1.20,BZD,0,0, 0.80);
+    sp(-0.72,ty+1.3,z-0.5 ,0.22,2.5,1.35,BZL,0,0, 0.32);
+    sp( 0.95,ty+2.7,z-0.5 ,0.26,4.3,1.75,BZ ,0,0,-0.52);
+    sp( 1.55,ty+3.8,z-0.55,0.20,3.0,1.20,BZD,0,0,-0.80);
+    sp( 0.72,ty+1.3,z-0.5 ,0.22,2.5,1.35,BZL,0,0,-0.32);
+  }
+  // ---- The Royal Museum of the Grand City of Fenn — 3D backdrop (from the model & mural) ----
+  function drawConcourse3D(cx,cz){
+    // base tier: wavy marble front (box + rounded corner bays) with pilasters & cornice
+    bx(cx,2.2,cz,34,4.4,16,G.marble);
+    cy(cx-14,2.2,cz+7,5,4.4,5,G.marble); cy(cx+14,2.2,cz+7,5,4.4,5,G.marble);
+    cy(cx,2.2,cz+8,6,4.4,4,G.marble);
+    bx(cx,4.62,cz,35.6,0.5,17.6,G.marbleDk);
+    for(var px=-15;px<=15;px+=3){ bx(cx+px,2.2,cz+8.2,0.55,3.9,0.22,G.marbleDk); }
+    // corner glass conservatory vaults on the base roof
+    sp(cx-12.5,5.35,cz+4.2,3.3,1.4,4.8,G.glass); sp(cx+12.5,5.35,cz+4.2,3.3,1.4,4.8,G.glass);
+    sp(cx-12.5,5.35,cz-4.2,3.3,1.4,4.8,G.glass); sp(cx+12.5,5.35,cz-4.2,3.3,1.4,4.8,G.glass);
+    // central front glass dome on a colonnaded drum
+    cy(cx,5.7,cz+4,4.6,2.6,4.6,G.marble);
+    for(var k=0;k<8;k++){ var an=k*Math.PI/4; cy(cx+Math.cos(an)*4.3,5.7,cz+4+Math.sin(an)*4.3,0.34,2.6,0.34,G.marbleDk); }
+    sp(cx,7.6,cz+4,4.2,2.7,4.2,G.glass); sp(cx,9.2,cz+4,0.5,0.5,0.5,G.gold);
+    // twin cupola towers with gold spires
+    [-9,9].forEach(function(tx){ var x=cx+tx, z=cz-1;
+      cy(x,5.9,z,2.6,3.4,2.6,G.marble); cy(x,7.8,z,2.95,0.5,2.95,G.marbleDk);
+      cy(x,9.2,z,2.25,2.6,2.25,G.marble); sp(x,10.9,z,2.5,1.5,2.5,G.stone);
+      co(x,12.2,z,0.5,1.9,G.gold); sp(x,13.2,z,0.3,0.3,0.3,G.gold); });
+    // rear upper block with pilasters, cornice, red banners, and the grand red dome
+    bx(cx,7.3,cz-4,14,5.8,9,G.marble);
+    for(px=-6;px<=6;px+=2.4){ bx(cx+px,7.3,cz+0.7,0.5,5.2,0.2,G.marbleDk); }
+    bx(cx,10.3,cz-4,15.2,0.55,10.2,G.marbleDk);
+    bx(cx-5.2,7.6,cz+0.9,1.5,3.4,0.12,G.red,0,0,0,1); bx(cx+5.2,7.6,cz+0.9,1.5,3.4,0.12,G.red,0,0,0,1);
+    sp(cx,11.7,cz-4,5.3,3.3,5.3,G.domeRed);
+    for(k=0;k<6;k++){ var a2=k*Math.PI/3; bx(cx+Math.cos(a2)*3.1,11.9,cz-4+Math.sin(a2)*3.1,0.35,2.2,0.35,G.marble,0,0,Math.cos(a2)*0.45); }
+    cy(cx,14.6,cz-4,0.7,1.0,0.7,G.marble); sp(cx,15.5,cz-4,0.5,0.5,0.5,G.gold);
+    bx(cx+0.06,16.4,cz-4,1.3,0.75,0.07,G.red,0,0,0,1);   // pennant at the summit
+    // portico: stepped base, four columns, hipped canopy
+    bx(cx,0.3,cz+10.6,8,0.6,3.2,G.stoneLt); bx(cx,0.82,cz+10.1,6.6,0.5,2.5,G.stoneLt);
+    [-2.4,-0.8,0.8,2.4].forEach(function(colx){ cy(cx+colx,2.1,cz+9.6,0.27,2.7,0.27,G.marble); });
+    co(cx,3.9,cz+9.6,3.2,1.4,G.marbleDk);
+  }
+  function drawLeersonBlock3D(cx,cz){
+    bx(cx,3.2,cz,22,6.4,10,G.stone);
+    bx(cx,6.55,cz,23.2,0.55,11.2,G.stoneDk);
+    for(var px=-9;px<=9;px+=2.6){ bx(cx+px,3.2,cz+5.15,0.5,5.6,0.2,G.stoneDk); }
+    [[-10,4],[10,4],[-10,-4],[10,-4]].forEach(function(p){ bx(cx+p[0],7.4,cz+p[1],4,1.6,4,G.stone); bx(cx+p[0],8.35,cz+p[1],4.6,0.4,4.6,G.stoneDk); });
+    bx(cx,7.6,cz,7,1.7,4,G.glass);                        // roof lantern
+    bx(cx,9.3,cz,1.1,0.65,0.07,G.red,0,0,0,1);            // rooftop banner
+  }
+  function drawCityDome(x,z,s){
+    bx(x,2.2*s,z,7*s,4.4*s,6*s,G.haze); sp(x,5.4*s,z,3.1*s,2.1*s,3.1*s,G.hazeDk);
+    sp(x,7.0*s,z,0.4*s,0.4*s,0.4*s,G.haze); }
+  function drawCourtyard(){
+    bx(0,-0.1,-30,240,0.2,240,G.ground);
+    bx(0,0.04,-24,5.6,0.06,60,G.path); bx(0,0.05,-30,14,0.05,14,G.path);
+    bx(0,0.7,-37,22,1.4,0.7,G.stoneDk);
+    for(var i=0;i<5;i++){ var pz=-22+i*7; [-5.6,5.6].forEach(function(px){ cy(px,0.7,pz,1.0,1.4,1.0,G.stoneDk); cy(px,1.55,pz,1.3,0.4,1.3,G.stone); co(px,1.7,pz,0.7,0.9,G.pine);}); }
+    // red banner poles flanking the approach (foreground depth)
+    [[-7.4,-19],[7.4,-19],[-7.4,-33],[7.4,-33]].forEach(function(p){ cy(p[0],2.2,p[1],0.09,4.4,0.09,G.stoneDk);
+      sp(p[0],4.5,p[1],0.14,0.14,0.14,G.gold); bx(p[0]+0.42,3.5,p[1],0.8,1.7,0.06,G.red,0,0,0,1); });
+    var pines=[[-14,-26],[-18,-34],[-22,-20],[14,-26],[18,-34],[22,-20],[-26,-30],[26,-30],[0,-44],[-10,-46],[10,-46]];
+    for(i=0;i<pines.length;i++){ var h=6+((i*37)%5); co(pines[i][0],h/2+0.2,pines[i][1],1.8,h,G.pine); }
+    // the Royal Museum skyline (mid-ground) + hazy city domes + mountains (far)
+    drawConcourse3D(16,-78);
+    drawLeersonBlock3D(-30,-72);
+    drawCityDome(-54,-94,1.15); drawCityDome(50,-96,1.3); drawCityDome(-6,-100,1.0); drawCityDome(34,-90,0.85);
+    co(-38,13,-112,22,30,G.mtn); co(4,15,-120,26,34,G.mtn); co(44,13,-110,23,30,G.mtn); co(-70,11,-105,19,26,G.mtn); co(76,11,-108,20,27,G.mtn);
+    drawStatue(-30);
+  }
+  // ---- exhibit room (used for back view + inside view) ----
+  function drawExhibit(){
+    // floor + walls — a long gallery running south (the entrance) to the crown at the north end
+    bx(0,-0.05,7,26,0.1,38,G.floor);
+    bx(0,2.5,-11,26,5,0.4,G.wall);    // back wall (north, behind crown)
+    bx(-13,2.5,7,0.4,5,38,G.wall);    // left wall
+    bx(13,2.5,7,0.4,5,38,G.wall);     // right wall
+    bx(0,5,7,26,0.4,38,G.wall);       // ceiling
+    // colonnade down the gallery (museum feel) — paired columns at intervals
+    for(var cz=20;cz>=-6;cz-=5.5){ cy(-9.5,2.2,cz,0.55,4.4,0.55,G.stone); cy(9.5,2.2,cz,0.55,4.4,0.55,G.stone);
+      bx(-9.5,4.5,cz,1.5,0.5,1.5,G.stoneDk); bx(9.5,4.5,cz,1.5,0.5,1.5,G.stoneDk); }   // capitals
+    // pedestal + crown at the north end
+    bx(0,0.6,0,2.4,1.2,2.4,G.stoneDk); bx(0,1.3,0,1.6,0.4,1.6,G.stone);
+    drawCrownGL(0,1.7,0,0.7);
+    // alarm light (visible to both cameras)
+    sp(7,4.0,-4,0.45,0.45,0.45, security.alarm?G.red:[0.5,0.5,0.5], 0,0,0, security.alarm?1:0);
+    // barrier cage (4 corner posts + top ring) lowers into floor when disabled
+    var by=scene3d.barrierY; // 0 up, -2 down
+    if(security.barrier || by>-1.9){
+      [[-1.6,-1.6],[1.6,-1.6],[1.6,1.6],[-1.6,1.6]].forEach(function(c,ci){ cy(c[0],2.0+by,c[1],0.16,4.0,0.16,G.figDk); });
+      bx(0,3.9+by,0,3.6,0.16,0.2,G.figDk); bx(0,3.9+by,0,0.2,0.16,3.6,G.figDk);
+      bx(0,0.1+by,0,3.6,0.16,0.2,G.figDk); bx(0,0.1+by,0,0.2,0.16,3.6,G.figDk);
+    }
+    // laser grid (red beams) — only in the hacker's view; it's deactivated before the 2nd team walks in
+    if(security.laser && scene3d.id!=="heistInside"){
+      for(var i=0;i<5;i++){ var y=0.8+i*0.7; bx(0,y,3.2,9,0.05,0.05,G.red,0,0,0,1); }
+      for(i=0;i<6;i++){ var x=-4.5+i*1.8; bx(x,2.0,3.2,0.05,3.0,0.05,G.red,0,0,0,1); }
+    }
+  }
+  function drawCrownGL(x,y,z,s){
+    // jeweled band
+    cy(x,y,z,1.35*s,0.6*s,1.35*s,G.gold);
+    cy(x,y-0.28*s,z,1.4*s,0.14*s,1.4*s,G.gold); // base rim (pearls suggested)
+    // rubies around the band (red accents, flat)
+    for(var i=0;i<6;i++){ var a=i/6*Math.PI*2;
+      drawMesh(M.sph, m4mul(T(x+Math.cos(a)*0.66*s, y+0.05*s, z+Math.sin(a)*0.66*s), Sc(0.17*s,0.2*s,0.12*s)), G.red, 1); }
+    // arches rising to the centre (gold), leaning toward the top
+    for(i=0;i<4;i++){ var an=i/4*Math.PI*2;
+      bx(x+Math.cos(an)*0.5*s, y+0.7*s, z+Math.sin(an)*0.5*s, 0.1*s,1.3*s,0.1*s, G.gold, Math.sin(an)*0.5, 0, -Math.cos(an)*0.5); }
+    // orb + cross finial
+    sp(x,y+1.35*s,z,0.28*s,0.28*s,0.28*s,G.gold);
+    bx(x,y+1.75*s,z,0.1*s,0.5*s,0.1*s,G.gold);
+    bx(x,y+1.78*s,z,0.34*s,0.1*s,0.1*s,G.gold);
+  }
+  function drawFigure3D(x,z,ph,amp,col){ col=col||G.body;
+    var sw=Math.sin(ph)*0.5*amp,swO=Math.sin(ph+Math.PI)*0.5*amp;
+    drawMesh(M.cyl,m4mulAll(T(x-0.22,1.0,z),Rx(sw),T(0,-0.5,0),Sc(0.28,1.0,0.32)),col);
+    drawMesh(M.cyl,m4mulAll(T(x+0.22,1.0,z),Rx(swO),T(0,-0.5,0),Sc(0.28,1.0,0.32)),col);
+    cy(x,1.55,z,0.74,1.1,0.5,col); sp(x,2.0,z,0.74,0.6,0.5,col);
+    drawMesh(M.cyl,m4mulAll(T(x-0.5,2.0,z),Rx(swO*0.8),T(0,-0.48,0),Sc(0.24,0.95,0.26)),col);
+    drawMesh(M.cyl,m4mulAll(T(x+0.5,2.0,z),Rx(sw*0.8),T(0,-0.48,0),Sc(0.24,0.95,0.26)),col);
+    sp(x,2.45,z,0.5,0.56,0.5,G.skin); sp(x,2.6,z,0.6,0.52,0.6,G.hair);
+  }
+  function drawSecurityDoor(z){
+    bx(0,4.4,z,26,0.6,0.6,G.figDk);                                  // lintel
+    bx(-12,2.2,z,0.6,4.8,0.6,G.figDk); bx(12,2.2,z,0.6,4.8,0.6,G.figDk); // posts
+    for(var x=-11;x<=11;x+=1.6){ bx(x,2.2,z,0.18,4.4,0.18,G.red,0,0,0,1); } // bars
+    bx(0,2.2,z,23,0.16,0.16,G.red,0,0,0,1);                          // mid rail
+  }
+  function drawSceneActor(){ drawFigure3D(scene3d.px,scene3d.pz,scene3d.phase,scene3d.moving); }
+  function drawGuard3D(g){
+    // lit patch on the floor ahead of the guard (the torch beam pool) — warm accent
+    var lx=g.x+g.fx*2.6, lz=g.z+g.fz*2.6;
+    drawMesh(M.cyl,m4mulAll(T(lx,0.05,lz),Sc(2.0,0.04,2.0)),G.warm,1);
+    drawFigure3D(g.x,g.z,g.phase,0.7,G.figDk);
+    // torch: handle in the lead hand + flame
+    var hx=g.x+g.fx*0.6, hz=g.z+g.fz*0.6;
+    cy(hx,1.7,hz,0.07,0.7,0.07,G.body);
+    sp(hx,2.15,hz,0.22,0.34,0.22,G.flame,1); // flame (warm accent)
+    sp(hx,2.32,hz,0.13,0.2,0.13,G.flameLt,1);
+  }
+  function drawGetawayCar(){
+    var x=scene3d.carX, z=scene3d.carZ;
+    bx(x,0.7,z,2.2,1.1,4.4,G.body); bx(x,1.5,z-0.2,1.9,0.9,2.2,G.figDk);
+    [[-1.0,1.6],[1.0,1.6],[-1.0,-1.6],[1.0,-1.6]].forEach(function(w){ cy(x+w[0],0.45,z+w[1],0.7,0.5,0.7,G.figDk,Math.PI/2); });
+  }
+
+  function renderScene3D(){
+    if(!glReady) return;
+    var id=scene3d.id;
+    if(id==="getaway"){
+      if(scene3d.reached){ var k=Math.min(1,scene3d.reachT/1.2);
+        glFrameSetup([scene3d.carX,4.0+k*2,scene3d.carZ+9-k*4],[0,3.5,-30],50,0.009);
+        drawCourtyard(); drawGetawayCar();
+      } else {
+        glFrameSetup([scene3d.px,3.4,scene3d.pz+7],[scene3d.px,1.8,scene3d.pz-6],55,0.011);
+        drawCourtyard(); drawGetawayCar();
+        if(scene3d.guards) for(var i=0;i<scene3d.guards.length;i++) drawGuard3D(scene3d.guards[i]);
+        drawSceneActor();
+      }
+    } else if(id==="secBack"){
+      // hacker looks in from BEHIND the crown (north side), toward the room
+      glFrameSetup([0,3.0,-8.5],[0,1.6,2],52,0.03);
+      drawExhibit();
+    } else { // heistInside
+      glFrameSetup([scene3d.px,3.2,scene3d.pz+7],[scene3d.px,1.6,scene3d.pz-4],55,0.022);
+      drawExhibit();
+      // the two sympathetic guards ("friends of the Hounds") flank the crown, pointedly facing the back wall
+      drawFigure3D(-6.2,-3.0,1.6,0,G.figDk); drawFigure3D(6.2,-3.0,1.6,0,G.figDk);
+      if(scene3d.doorZ) for(var di=0;di<scene3d.doorZ.length;di++){ if(!scene3d.doorsOpen[di]) drawSecurityDoor(scene3d.doorZ[di]); }
+      drawSceneActor();
+    }
+  }
+  function updateScene3D(dt){
+    scene3d.t+=dt;
+    // animate barrier lowering
+    if(!security.barrier && scene3d.barrierY>-2) scene3d.barrierY=Math.max(-2,scene3d.barrierY-dt*1.6);
+    if(scene3d.id==="heistInside"){
+      var iv=inputVec(); var spd=6;
+      scene3d.px+=iv.x*spd*dt; scene3d.pz+=iv.y*spd*dt;
+      if(scene3d.px>11)scene3d.px=11; if(scene3d.px<-11)scene3d.px=-11;
+      if(scene3d.pz>19)scene3d.pz=19;
+      // can't pass a closed security door
+      if(scene3d.doorZ){ for(var di=0;di<scene3d.doorZ.length;di++){ if(!scene3d.doorsOpen[di] && scene3d.pz < scene3d.doorZ[di]+0.7){ scene3d.pz=scene3d.doorZ[di]+0.7; break; } } }
+      if(scene3d.pz<-7)scene3d.pz=-7;
+      var mv=Math.hypot(iv.x,iv.y); scene3d.moving+=(Math.min(1,mv)-scene3d.moving)*Math.min(1,12*dt);
+      scene3d.phase+=dt*(mv>0.05?7:0);
+    } else if(scene3d.id==="getaway"){
+      scene3d.clock=(scene3d.clock||3840)+dt*5;                 // 1 real second = 5 game-seconds
+      if(scene3d.reached){ scene3d.reachT+=dt; if(scene3d.reachT>2.8){ enterStage("chase"); } return; }
+      var iv=inputVec(); var spd=6;
+      scene3d.px+=iv.x*spd*dt; scene3d.pz+=iv.y*spd*dt;
+      if(scene3d.px>7)scene3d.px=7; if(scene3d.px<-7)scene3d.px=-7;
+      if(scene3d.pz>6)scene3d.pz=6; if(scene3d.pz<-13)scene3d.pz=-13;
+      var mv=Math.hypot(iv.x,iv.y); scene3d.moving+=(Math.min(1,mv)-scene3d.moving)*Math.min(1,12*dt);
+      scene3d.phase+=dt*(mv>0.05?7:0);
+      // patrol guards (sweep along x), torch pool ahead in facing dir
+      var caught=false;
+      for(var i=0;i<scene3d.guards.length;i++){ var g=scene3d.guards[i];
+        g.x+=g.dir*g.spd*dt; if(g.x>g.range){g.x=g.range;g.dir=-1;} if(g.x<-g.range){g.x=-g.range;g.dir=1;}
+        g.fx=g.dir; g.fz=0; g.phase+=dt*5;
+        var lx=g.x+g.fx*2.6, lz=g.z;
+        if(Math.hypot(scene3d.px-lx,scene3d.pz-lz)<2.0) caught=true;            // in the torch pool
+        if(Math.hypot(scene3d.px-g.x,scene3d.pz-g.z)<1.1) caught=true;          // walked into the guard
+      }
+      if(caught){ captureFail(initGetaway,"A torch beam caught you!"); return; }
+      if(scene3d.caughtFlash>0) scene3d.caughtFlash=Math.max(0,scene3d.caughtFlash-dt*2);
+      // reach the car (parked by the statue) -> hold on the statue, then escape
+      if(scene3d.pz<=scene3d.carZ+2.2 && Math.abs(scene3d.px-scene3d.carX)<2.6){ scene3d.reached=true; scene3d.reachT=0; setObj("Rendezvous made","The Tiskin Monument — go!"); joyEnabled=false; }
+    }
+  }
+
+  // ============================================================ 2D MAP (pencil top-down) — Royal Museum of Fenn
+  // Leerson Hall (west building) with interior floorplan; Main Concourse (domed, east); Tiskin Park + monument (north)
+  var LEER={x:-470,y:-180,w:320,h:430};        // Leerson Hall / West Annex (grand palace)
+  var CONC={x:150,y:-70,w:360,h:390};          // Main Concourse (domed, east)
+  var MOON={x:-120,y:-360,w:230,h:170};        // Moonside Courtyard (open, north-centre)
+  var monument={x:120,y:-470};                 // Tiskin Monument (Tiskin Park, north)
+  var ventPt={x:-320,y:-440};          // roof vent at the FAR (north) end of the walled garden — hacker must cross it
+  var forcedPt={x:CONC.x+CONC.w*0.5,y:CONC.y-32};        // forced entry at the BACK of the Concourse (thieves)
+  var crownRoom={x:LEER.x+90,y:LEER.y+150};              // Closed Exhibit room (inside Leerson)
+  var getawayCar={x:-420,y:-470};              // getaway car (NW)
+  var decoyCar={x:60,y:430};                   // decoy car (south)
+  var GROUNDS={x0:-545,y0:-560,x1:545,y1:475}; // grass extent — the playable grounds (acts as the level border)
+  var cam={x:0,y:0};
+  function w2s(x,y){ return {x:x-cam.x+W/2, y:y-cam.y+H/2}; }
+  var trees=[]; (function(){ var s=[
+    [-300,-360],[-180,-400],[-60,-380],[40,-400],[150,-360],[260,-380],   // King's Grotto (north)
+    [360,-200],[420,-40],[460,160],[400,300],[300,360],                    // east grounds
+    [-260,300],[-160,360],[-360,180],[-420,40],[60,330],[-380,-60]];
+    var blds=[LEER,CONC,MOON];
+    function inB(x,y,r){ for(var k=0;k<blds.length;k++){ var b=blds[k]; if(x>b.x-r&&x<b.x+b.w+r&&y>b.y-r&&y<b.y+b.h+r) return true; } return false; }
+    for(var i=0;i<s.length;i++){ var r=30+((i*53)%22); if(inB(s[i][0],s[i][1],r+6)) continue; trees.push({x:s[i][0],y:s[i][1],r:r}); } })();
+  function underTree(x,y){ for(var i=0;i<trees.length;i++){ if(Math.hypot(x-trees[i].x,y-trees[i].y)<trees[i].r*0.92) return true; } return false; }
+  function drawTrees(alpha){ var ts=trees.slice().sort(function(a,b){return a.y-b.y;});
+    ctx.save(); ctx.globalAlpha=alpha==null?1:alpha;
+    for(var i=0;i<ts.length;i++){ var s=w2s(ts[i].x,ts[i].y),r=ts[i].r; if(s.x<-90||s.x>W+90||s.y<-90||s.y>H+90)continue;
+      // trunk shadow
+      ctx.globalAlpha=(alpha==null?1:alpha)*0.35; Sk.fillCircle(s.x,s.y+r*0.3,r*0.85,GREEN_DK,(ts[i].x|0)+5); ctx.globalAlpha=alpha==null?1:alpha;
+      Sk.fillCircle(s.x,s.y,r,GREEN,(ts[i].x|0));
+      Sk.fillCircle(s.x-r*0.32,s.y-r*0.28,r*0.55,GREEN_LT,(ts[i].x|0)+2);
+      Sk.begin(2.0,GREEN_DK); Sk.circle(s.x,s.y,r,(ts[i].x|0)+3);
+      Sk.begin(1.3,GREEN_DK); ctx.globalAlpha=(alpha==null?1:alpha)*0.5; Sk.hatch(s.x-r*0.6,s.y-r*0.2,r*1.2,r*0.9,0.4,(ts[i].x|0)+9); ctx.globalAlpha=alpha==null?1:alpha;
+    } ctx.restore(); }
+
+  function path(ax,ay,bx2,by2,wd){ var p=w2s(ax,ay),q=w2s(bx2,by2); ctx.strokeStyle="#d6d0bd"; ctx.lineWidth=wd||22; ctx.lineCap="round"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke(); }
+  function room(x,y,w,h,label,salt,fill){ var a=w2s(x,y); if(fill){ ctx.fillStyle=fill; ctx.fillRect(a.x,a.y,w,h);} Sk.begin(1.8,INK); Sk.rect(a.x,a.y,w,h,salt);
+    if(label){ ctx.fillStyle=INK; ctx.font="700 10px Georgia,serif"; ctx.textAlign="center"; ctx.fillText(label,a.x+w/2,a.y+h/2+3); ctx.textAlign="left"; } }
+  function label(x,y,txt,col,sz){ var s=w2s(x,y); ctx.fillStyle=col||INK; ctx.font="700 "+(sz||12)+"px Georgia,serif"; ctx.textAlign="center"; ctx.fillText(txt,s.x,s.y); ctx.textAlign="left"; }
+
+  var leerEntered=false, concEntered=false;
+  function roofBuilding(b,name){ var a=w2s(b.x,b.y);
+    ctx.save(); ctx.globalAlpha=0.3; Sk.fillPoly([[a.x+6,a.y+8],[a.x+b.w+6,a.y+8],[a.x+b.w+6,a.y+b.h+8],[a.x+6,a.y+b.h+8]],INK,(b.x|0)); ctx.restore();
+    Sk.fillPoly([[a.x,a.y],[a.x+b.w,a.y],[a.x+b.w,a.y+b.h],[a.x,a.y+b.h]],ROOF,(b.x|0));
+    Sk.begin(1.2,ROOF_DK); Sk.hatch(a.x+4,a.y+4,b.w-8,b.h-8,0.5,(b.x|0)+1);
+    Sk.begin(2.8,INK); Sk.rect(a.x,a.y,b.w,b.h,(b.x|0));
+    label(b.x+b.w/2,b.y-12,name,INK,13);
+  }
+  // ---- ornate top-down roof helpers (to match the museum map) ----
+  function rShadow(a,w,h,off,salt){ ctx.save(); ctx.globalAlpha=0.30; Sk.fillPoly([[a.x+off,a.y+off],[a.x+w+off,a.y+off],[a.x+w+off,a.y+h+off],[a.x+off,a.y+h+off]],INK,salt); ctx.restore(); }
+  function rTier(a,w,h,fill,salt){ Sk.fillPoly([[a.x,a.y],[a.x+w,a.y],[a.x+w,a.y+h],[a.x,a.y+h]],fill,salt); Sk.begin(2.2,INK); Sk.rect(a.x,a.y,w,h,salt+1); }
+  function glassRoof(x,y,w,h,salt){ Sk.fillPoly([[x,y],[x+w,y],[x+w,y+h],[x,y+h]],"#dde6e6",salt);
+    Sk.begin(0.9,"#9fb1b2"); for(var gx=x+12;gx<x+w;gx+=13) Sk.line(gx,y+2,gx,y+h-2,salt+(gx|0)); for(var gy=y+12;gy<y+h;gy+=13) Sk.line(x+2,gy,x+w-2,gy,salt+(gy|0)+1);
+    Sk.begin(2.0,INK); Sk.rect(x,y,w,h,salt+2); }
+  function domeRoof(cx,cy,r,salt){ ctx.save(); ctx.globalAlpha=0.26; Sk.fillCircle(cx+7,cy+8,r+3,INK,salt); ctx.restore();
+    Sk.fillCircle(cx,cy,r+7,ROOF_DK,salt+1); Sk.begin(2.0,INK); Sk.circle(cx,cy,r+7,salt+2);       // drum
+    Sk.fillCircle(cx,cy,r,"#e8e2d0",salt+3); Sk.fillCircle(cx-r*0.3,cy-r*0.3,r*0.62,"#f2ecdb",salt+4);  // glass + highlight
+    Sk.begin(0.9,"#a7a28d"); for(var k=0;k<14;k++){ var an=k*Math.PI/7; Sk.line(cx,cy,cx+Math.cos(an)*r,cy+Math.sin(an)*r,salt+10+k); }
+    Sk.circle(cx,cy,r*0.62,salt+40); Sk.circle(cx,cy,r*0.32,salt+41); Sk.begin(2.0,INK); Sk.circle(cx,cy,r,salt+42); Sk.fillCircle(cx,cy,2.6,INK,salt+43); }
+  function cupola(cx,cy,r,salt){ ctx.save(); ctx.globalAlpha=0.30; Sk.fillCircle(cx+3,cy+4,r+1,INK,salt); ctx.restore();
+    Sk.fillCircle(cx,cy,r,ROOF,salt+1); Sk.begin(1.4,INK); Sk.circle(cx,cy,r,salt+2); Sk.fillCircle(cx,cy,r*0.42,"#efe9d8",salt+3); Sk.fillCircle(cx,cy,1.8,INK,salt+4); }
+  function archWins(x0,y0,horiz,len,n,inw,salt){ Sk.begin(1.5,INK2);
+    for(var i=0;i<n;i++){ var t=(i+0.5)/n, x=horiz?x0+len*t:x0, y=horiz?y0:y0+len*t;
+      if(horiz){ Sk.line(x-4,y+inw*3,x-4,y+inw*10,salt+i); Sk.line(x+4,y+inw*3,x+4,y+inw*10,salt+i+90); Sk.line(x-4,y+inw*3,x+4,y+inw*3,salt+i+180); }
+      else { Sk.line(x+inw*3,y-4,x+inw*10,y-4,salt+i); Sk.line(x+inw*3,y+4,x+inw*10,y+4,salt+i+90); Sk.line(x+inw*3,y-4,x+inw*3,y+4,salt+i+180); } } }
+  function steps(cx,cy,w,h,n,salt){ for(var i=0;i<n;i++){ var ww=w*(1-i*0.16); Sk.begin(1.6,INK2); Sk.rect(cx-ww/2,cy-h+i*(h/n),ww,h/n,salt+i); } }
+  function drawConcourseRoof(b){ var a=w2s(b.x,b.y);
+    rShadow(a,b.w,b.h,16,(b.x|0)); rTier(a,b.w,b.h,ROOF,(b.x|0)+2);
+    Sk.begin(1.0,ROOF_DK); Sk.hatch(a.x+4,a.y+4,b.w-8,b.h-8,0.4,(b.x|0)+5);
+    glassRoof(a.x+b.w*0.05,a.y+b.h*0.30,b.w*0.22,b.h*0.52,(b.x|0)+1200);             // conservatory wing (west)
+    domeRoof(a.x+b.w*0.55,a.y+b.h*0.43,Math.min(b.w,b.h)*0.27,(b.x|0)+1300);          // grand central glass dome
+    domeRoof(a.x+b.w*0.50,a.y+b.h*0.76,Math.min(b.w,b.h)*0.135,(b.x|0)+1500);         // secondary dome (south)
+    cupola(a.x+b.w*0.17,a.y+b.h*0.14,9,(b.x|0)+1600); cupola(a.x+b.w*0.86,a.y+b.h*0.18,8,(b.x|0)+1640);
+    cupola(a.x+b.w*0.88,a.y+b.h*0.66,8,(b.x|0)+1680);
+    archWins(a.x+22,a.y,true,b.w-44,9,1,(b.x|0)+1700); archWins(a.x+b.w,a.y+24,false,b.h-48,8,-1,(b.x|0)+1760);
+    steps(a.x+b.w*0.52,a.y+b.h+24,76,26,4,(b.x|0)+1820);                              // grand entrance steps (south)
+    for(var c=0;c<5;c++){ var px=a.x+b.w*0.52-32+c*16; Sk.fillCircle(px,a.y+b.h-12,3.4,ROOF_DK,(b.x|0)+1860+c); Sk.begin(1.3,INK); Sk.circle(px,a.y+b.h-12,3.4,(b.x|0)+1880+c); }
+    Sk.begin(3.2,INK); Sk.rect(a.x,a.y,b.w,b.h,(b.x|0)+1900);
+    label(b.x+b.w/2,b.y-14,"MAIN CONCOURSE",INK,13); }
+  function drawLeersonRoof(b){ var a=w2s(b.x,b.y);
+    rShadow(a,b.w,b.h,16,(b.x|0)); rTier(a,b.w,b.h,ROOF,(b.x|0)+2);
+    Sk.begin(1.0,ROOF_DK); Sk.hatch(a.x+4,a.y+4,b.w-8,b.h-8,0.4,(b.x|0)+5);
+    var pv=[[a.x,a.y],[a.x+b.w-46,a.y],[a.x,a.y+b.h-46],[a.x+b.w-46,a.y+b.h-46]];      // corner pavilions
+    for(var i=0;i<4;i++){ var p=pv[i]; ctx.save(); ctx.globalAlpha=0.26; Sk.fillPoly([[p[0]+6,p[1]+7],[p[0]+52,p[1]+7],[p[0]+52,p[1]+53],[p[0]+6,p[1]+53]],INK,(b.x|0)+i); ctx.restore();
+      Sk.fillPoly([[p[0],p[1]],[p[0]+46,p[1]],[p[0]+46,p[1]+46],[p[0],p[1]+46]],ROOF_DK,(b.x|0)+10+i); Sk.begin(2.0,INK); Sk.rect(p[0],p[1],46,46,(b.x|0)+20+i); }
+    glassRoof(a.x+b.w*0.35,a.y+b.h*0.40,b.w*0.30,b.h*0.20,(b.x|0)+1200);              // central roof lantern
+    archWins(a.x+58,a.y,true,b.w-116,7,1,(b.x|0)+1300); archWins(a.x+58,a.y+b.h,true,b.w-116,7,-1,(b.x|0)+1400);
+    archWins(a.x,a.y+58,false,b.h-116,8,1,(b.x|0)+1500); archWins(a.x+b.w,a.y+58,false,b.h-116,8,-1,(b.x|0)+1600);
+    steps(a.x+b.w*0.5,a.y+b.h+20,60,20,3,(b.x|0)+1700);                               // portico (south)
+    for(var c=0;c<5;c++){ var px=a.x+b.w*0.5-32+c*16; Sk.fillCircle(px,a.y+b.h-10,3,ROOF_DK,(b.x|0)+1720+c); }
+    Sk.begin(3.2,INK); Sk.rect(a.x,a.y,b.w,b.h,(b.x|0)+1900);
+    label(b.x+b.w/2,b.y-14,"LEERSON HALL",INK,13); label(b.x+b.w*0.5,b.y+b.h*0.27,"roof access",INK2,9); }
+  function drawMap(){
+    paper(true);
+    // grass grounds (sage, matches the map) — fills the playable area; cream "page" shows outside it
+    var g0=w2s(GROUNDS.x0,GROUNDS.y0), g1=w2s(GROUNDS.x1,GROUNDS.y1);
+    Sk.fillPoly([[g0.x,g0.y],[g1.x,g0.y],[g1.x,g1.y],[g0.x,g1.y]],GRASS,7);
+    Sk.begin(1.0,GRASS_DK); Sk.hatch(g0.x+6,g0.y+6,(g1.x-g0.x)-12,(g1.y-g0.y)-12,0.22,9);
+    Sk.begin(3.4,GRASS_DK); Sk.rect(g0.x,g0.y,g1.x-g0.x,g1.y-g0.y,7);
+    // paths (south pathway + connections + escape route)
+    path(CONC.x-30,CONC.y+CONC.h+30, LEER.x+LEER.w+30,LEER.y+LEER.h-40);     // south pathway
+    path(LEER.x+LEER.w/2,LEER.y, MOON.x+MOON.w/2,MOON.y+MOON.h);             // leerson -> moonside
+    path(MOON.x+MOON.w/2,MOON.y, monument.x,monument.y+60);                  // -> park
+    path(CONC.x+CONC.w/2,CONC.y, monument.x+60,monument.y+40);               // concourse -> park
+    path(monument.x,monument.y, getawayCar.x+30,getawayCar.y+30);            // escape route -> getaway car
+
+    // ---- Leerson Hall: closed roof, or interior floorplan once entered ----
+    if(!leerEntered){ drawLeersonRoof(LEER); }
+    else {
+      var L=w2s(LEER.x,LEER.y); Sk.fillPoly([[L.x,L.y],[L.x+LEER.w,L.y],[L.x+LEER.w,L.y+LEER.h],[L.x,L.y+LEER.h]],"#efe9d8",10);
+      Sk.begin(2.8,INK); Sk.rect(L.x,L.y,LEER.w,LEER.h,10); label(LEER.x+LEER.w/2,LEER.y-12,"LEERSON HALL",INK,13);
+      room(LEER.x+20,LEER.y+18,LEER.w-40,70,"GUARD HOUSE",11);
+      room(LEER.x+20,LEER.y+100,140,120,"CLOSED EXHIBIT",12,"#e2dcc8");
+      room(LEER.x+170,LEER.y+100,LEER.w-190,120,"LEERSON GALLERY",13);
+      room(LEER.x+20,LEER.y+232,150,150,"PORTRAIT ROOM",14);
+      room(LEER.x+180,LEER.y+232,LEER.w-200,150,"PORTICO",15);
+      var sd=w2s(LEER.x+160,LEER.y+150); Sk.begin(2.4,RED); Sk.line(sd.x,sd.y-18,sd.x,sd.y+18,16); label(LEER.x+160,LEER.y+96,"security doors",RED,10);
+    }
+
+    // ---- Main Concourse: closed roof+dome, or interior once entered ----
+    if(!concEntered){ drawConcourseRoof(CONC);
+    } else {
+      var C=w2s(CONC.x,CONC.y); Sk.fillPoly([[C.x,C.y],[C.x+CONC.w,C.y],[C.x+CONC.w,C.y+CONC.h],[C.x,C.y+CONC.h]],"#efe9d8",20);
+      Sk.begin(2.8,INK); Sk.rect(C.x,C.y,CONC.w,CONC.h,20); label(CONC.x+CONC.w/2,CONC.y-12,"MAIN CONCOURSE",INK,13);
+      var dc=w2s(CONC.x+CONC.w/2,CONC.y+CONC.h/2); Sk.begin(2.0,INK); Sk.circle(dc.x,dc.y,Math.min(CONC.w,CONC.h)*0.28,24);
+      Sk.fillCircle(dc.x,dc.y,12,"#e2dcc8",26); drawCrown2D(dc.x,dc.y,10);
+    }
+    label(CONC.x+CONC.w/2,CONC.y+CONC.h+18,"MUSEUM ENTRANCE",INK2,11);
+
+    // ---- Moonside Courtyard (open) ----
+    var Mn=w2s(MOON.x,MOON.y); Sk.begin(2.2,INK); Sk.rect(Mn.x,Mn.y,MOON.w,MOON.h,30); label(MOON.x+MOON.w/2,MOON.y+16,"MOONSIDE",INK2,10);
+    for(var i=0;i<5;i++){ var ms=w2s(MOON.x+40+i*36,MOON.y+90); Sk.begin(1.6,INK2); Sk.circle(ms.x,ms.y,7,31+i); } // sculptures
+
+    // ---- Tiskin Park + monument (north) ----
+    var pk=w2s(monument.x,monument.y+10);
+    // decorative inner pentagon ring around the statue (for show — matches the outer wall, no collision)
+    var ir=74, uv=[[0,-1],[0.951,-0.309],[0.588,0.809],[-0.588,0.809],[-0.951,-0.309]];
+    Sk.begin(2.0,INK); ctx.beginPath();
+    for(i=0;i<5;i++){ var wp=w2s(monument.x+uv[i][0]*ir, monument.y+uv[i][1]*ir); if(i===0)ctx.moveTo(wp.x,wp.y); else ctx.lineTo(wp.x,wp.y); }
+    ctx.closePath(); ctx.stroke();
+    var st=w2s(monument.x,monument.y); Sk.begin(2.4,INK); Sk.rect(st.x-15,st.y-8,30,18,60);
+    Sk.fillPoly([[st.x,st.y-10],[st.x-12,st.y-26],[st.x-3,st.y-12]],"#b07a3a",61); Sk.poly([[st.x,st.y-10],[st.x-12,st.y-26],[st.x-3,st.y-12]],true,61);
+    Sk.fillPoly([[st.x,st.y-10],[st.x+12,st.y-26],[st.x+3,st.y-12]],"#b07a3a",62); Sk.poly([[st.x,st.y-10],[st.x+12,st.y-26],[st.x+3,st.y-12]],true,62);
+    Sk.line(st.x,st.y-10,st.x,st.y-34,63); label(monument.x,monument.y+30,"TISKIN MONUMENT",INK,11);
+
+    // ---- vent (roof access) on Leerson ----
+    var vt=w2s(ventPt.x,ventPt.y); Sk.begin(2.0,INK); Sk.rect(vt.x-13,vt.y-13,26,26,70);
+    Sk.begin(1.3,INK2); for(i=-2;i<=2;i++) Sk.line(vt.x-10,vt.y+i*5,vt.x+10,vt.y+i*5,71+i); label(ventPt.x,ventPt.y-22,"vent",INK2,10);
+
+    // ---- dead-end hedge walls ----
+    drawWalls();
+
+    // ---- cars ----
+    var gc=w2s(getawayCar.x,getawayCar.y); Sk.fillPoly([[gc.x-16,gc.y-9],[gc.x+16,gc.y-9],[gc.x+16,gc.y+9],[gc.x-16,gc.y+9]],RED,80); Sk.begin(2.0,INK); Sk.rect(gc.x-16,gc.y-9,32,18,80); label(getawayCar.x,getawayCar.y-20,"GETAWAY CAR",RED,11);
+    var dca=w2s(decoyCar.x,decoyCar.y); Sk.fillPoly([[dca.x-15,dca.y-8],[dca.x+15,dca.y-8],[dca.x+15,dca.y+8],[dca.x-15,dca.y+8]],"#c8b9a0",82); Sk.begin(2.0,INK); Sk.rect(dca.x-15,dca.y-8,30,16,82); label(decoyCar.x,decoyCar.y+22,"DECOY CAR",RED,11);
+  }
+  function drawPerson(x,y,o){ o=o||{}; var s=o.s||1,ph=o.phase||0,amp=o.amp||0,fem=o.fem,col=o.col||INK;
+    Sk.begin(1.0,INK2); ctx.globalAlpha=0.45; ctx.beginPath(); ctx.ellipse(x,y+2,9*s,4*s,0,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;
+    var sw=Math.sin(ph)*4*amp,swO=Math.sin(ph+Math.PI)*4*amp; Sk.begin(2.2*s,col);
+    Sk.line(x,y-15*s,x-3*s,y+sw,1); Sk.line(x,y-15*s,x+3*s,y-sw,2);
+    if(fem){ Sk.fillPoly([[x-7*s,y-15*s],[x+7*s,y-15*s],[x+4*s,y-25*s],[x-4*s,y-25*s]],PAPER,3); Sk.poly([[x-7*s,y-15*s],[x+7*s,y-15*s],[x+4*s,y-25*s],[x-4*s,y-25*s]],true,3); }
+    Sk.line(x,y-15*s,x,y-32*s,4); Sk.line(x,y-29*s,x-7*s,y-21*s+swO*0.6,5); Sk.line(x,y-29*s,x+7*s,y-21*s-swO*0.6,6);
+    Sk.circle(x,y-38*s,6*s,7); if(fem){ Sk.line(x-6*s,y-38*s,x-7*s,y-28*s,8); Sk.line(x+6*s,y-38*s,x+7*s,y-28*s,9);} }
+  function drawWaypoint(wx,wy,label){ var s=w2s(wx,wy),pulse=Math.sin(boilT*4)*3;
+    Sk.begin(2.4,RED); Sk.circle(s.x,s.y,15+pulse,200);
+    if(label){ ctx.fillStyle=RED; ctx.font="700 12px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText(label,s.x,s.y-24); ctx.textAlign="left"; } }
+
+  // actor + crew
+  var actor={x:0,y:0,phase:0,speed:0,fem:false,r:15}; var ACT=180;
+  var partner={x:0,y:0}; var crew=[];
+  // hedge walls (top-left x,y,w,h) — a maze in the grounds making the break-in points harder to reach
+  var walls=[
+    // ---- near the Leerson vent (north-west back) ----
+    {x:LEER.x+LEER.w+40,y:LEER.y-120,w:150,h:16},
+    {x:LEER.x+LEER.w+40,y:LEER.y-120,w:16,h:120},
+    {x:LEER.x+LEER.w+20,y:LEER.y+LEER.h+30,w:16,h:120},
+    {x:LEER.x-60,y:LEER.y-40,w:16,h:220},        // west flank hedge
+    {x:LEER.x-60,y:LEER.y+180,w:120,h:16},
+    // ---- near the Concourse forced entry (north back) ----
+    {x:CONC.x-190,y:CONC.y-120,w:150,h:16},
+    {x:CONC.x-50,y:CONC.y-120,w:16,h:120},
+    {x:CONC.x-60,y:CONC.y+CONC.h+20,w:150,h:16},
+    {x:CONC.x+CONC.w+30,y:CONC.y-20,w:16,h:200}, // east flank hedge
+    // ---- central maze between the buildings & approaches ----
+    {x:-30,y:60,w:16,h:160},
+    {x:-150,y:0,w:140,h:16},
+    {x:-150,y:0,w:16,h:120},
+    {x:30,y:140,w:160,h:16},
+    {x:180,y:20,w:16,h:140},
+    {x:-260,y:120,w:16,h:160},
+    {x:-260,y:260,w:180,h:16},
+    {x:60,y:230,w:16,h:150},
+    {x:-90,y:-110,w:130,h:16},     // hedge just south of Moonside
+    {x:MOON.x+MOON.w+30,y:MOON.y+40,w:16,h:150},
+    {x:240,y:160,w:16,h:170},
+    {x:120,y:330,w:160,h:16},
+    // ---- walled garden behind Leerson Hall: hacker is funnelled through it (gaps at south & north) ----
+    {x:-450,y:-470,w:16,h:260},   // west wall
+    {x:-206,y:-470,w:16,h:260},   // east wall
+    {x:-450,y:-470,w:90,h:16},    // north wall — left of gap
+    {x:-280,y:-470,w:90,h:16},    // north wall — right of gap
+    {x:-450,y:-226,w:90,h:16},    // south wall — left of gap (entry)
+    {x:-280,y:-226,w:90,h:16}     // south wall — right of gap (entry)
+  ];
+  var buildingsCol=[]; function buildBuildingCol(){ buildingsCol=[
+    {x:LEER.x+LEER.w/2,y:LEER.y+LEER.h/2,w:LEER.w,h:LEER.h},
+    {x:CONC.x+CONC.w/2,y:CONC.y+CONC.h/2,w:CONC.w,h:CONC.h} ];
+    for(var i=0;i<walls.length;i++){ var w=walls[i]; buildingsCol.push({x:w.x+w.w/2,y:w.y+w.h/2,w:w.w,h:w.h}); } }
+  function drawWalls(){ for(var i=0;i<walls.length;i++){ var w=walls[i],a=w2s(w.x,w.y);
+    Sk.fillPoly([[a.x,a.y],[a.x+w.w,a.y],[a.x+w.w,a.y+w.h],[a.x,a.y+w.h]],GREEN_DK,(w.x|0));
+    Sk.begin(2,INK); Sk.rect(a.x,a.y,w.w,w.h,(w.x|0)); Sk.begin(1.2,GREEN); Sk.hatch(a.x+2,a.y+2,w.w-4,w.h-4,0.5,(w.x|0)+3); } }
+  function moveActor(dt){ var iv=inputVec(); var tg=iv.len*ACT; actor.speed+=(tg-actor.speed)*Math.min(1,12*dt);
+    if(actor.speed<2)actor.speed=0; if(iv.len>0.05){ actor.x+=iv.x*actor.speed*dt; actor.y+=iv.y*actor.speed*dt; }
+    for(var i=0;i<buildingsCol.length;i++){ var p=resolveRect2D(actor.x,actor.y,actor.r||15,buildingsCol[i]); actor.x=p.x; actor.y=p.y; }
+    actor.x=Math.max(GROUNDS.x0+14,Math.min(GROUNDS.x1-14,actor.x));      // grass = level border
+    actor.y=Math.max(GROUNDS.y0+14,Math.min(GROUNDS.y1-14,actor.y));
+    actor.phase+=dt*(4+(actor.speed/ACT)*9); cam.x+=(actor.x-cam.x)*Math.min(1,7*dt); cam.y+=(actor.y-cam.y)*Math.min(1,7*dt); }
+  function near(ax,ay,bx2,by2,r){ return Math.hypot(ax-bx2,ay-by2)<r; }
+
+  // ---- walled-garden patrol (hacker beat): one guard circles the interior anti-clockwise ----
+  var gardenGuard=null;
+  function initGarden(){ gardenGuard={ path:[[-410,-430],[-410,-250],[-230,-250],[-230,-430]], // TL→BL→BR→TR = anti-clockwise (y-down)
+    i:0, x:-410, y:-430, fx:0, fy:1, spd:66, chase:false, phase:0 }; }
+  function updateGarden(dt){ if(!gardenGuard||captured) return; var g=gardenGuard, t=g.path[(g.i+1)%g.path.length];
+    var dx=t[0]-g.x, dy=t[1]-g.y, d=Math.hypot(dx,dy)||1;
+    if(d<5){ g.i=(g.i+1)%g.path.length; } else { g.x+=dx/d*g.spd*dt; g.y+=dy/d*g.spd*dt; g.fx=dx/d; g.fy=dy/d; }
+    g.phase+=dt*5;
+    var ax=actor.x-g.x, ay=actor.y-g.y, dist=Math.hypot(ax,ay);
+    if(dist<26 || (dist<135 && (ax*g.fx+ay*g.fy)/(dist||1)>0.84)){ captureFail(startHackerBeat,"The garden patrol spotted you!"); } }
+
+  // ============================================================ STAGE MACHINE
+  var stage="title", st=0, beat=0;
+  function enterStage(name){ doFlash("#fff"); stage=name; st=0; tap=false; beginPressed=false; clearButtons();
+    actionEl.style.display="none"; startEl.style.display="none"; timerEl.style.display="none";
+    barEl.style.display="none"; wantedEl.style.display="none"; setSub(""); joyEnabled=false; hideJoy();
+    glCanvas.style.display=(name==="scene3d")?"block":"none";
+    if(name==="title")initTitle(); else if(name==="field")initField(); else if(name==="scene3d")initScene3D();
+    else if(name==="getawayCut")initScene3D(); else if(name==="chase")initChase(); else if(name==="complete")initComplete(); }
+
+  // ---- TITLE ----
+  function initTitle(){ startEl.style.display="block"; startEl.textContent="Begin the job ▸"; setObj(""); }
+  function vsBoxRect(){ var w=Math.min(340,W*0.88), h=46; return {x:W/2-w/2, y:H*0.69, w:w, h:h}; }
+  function updateTitle(){
+    if(beginPressed){ beginPressed=false; tap=false; enterStage("field"); return; }
+    if(tap){ tap=false; var r=vsBoxRect();
+      if(ptr.x>=r.x&&ptr.x<=r.x+r.w&&ptr.y>=r.y&&ptr.y<=r.y+r.h){ downBoost=!downBoost; }
+      else enterStage("field"); } }
+  function renderTitle(){ paper(true); frameBorder();
+    ctx.fillStyle=INK; ctx.textAlign="center";
+    var ttl="THE FENN JOB", tfs=Math.min(58, Math.floor(W*0.135)), tf=function(s){ return "700 "+s+"px Georgia,'Hoefler Text','Times New Roman',serif"; };
+    ctx.font=tf(tfs); while(ctx.measureText(ttl).width>W*0.86 && tfs>18){ tfs-=2; ctx.font=tf(tfs); }
+    ctx.fillText(ttl,W/2,H*0.28);
+    ctx.fillStyle=INK2; ctx.font="italic "+Math.round(tfs*0.34)+"px Georgia,serif"; ctx.fillText("— a museum heist —",W/2,H*0.28+tfs*0.62);
+    drawCrown2D(W/2,H*0.5,30);
+    ctx.fillStyle=INK2; ctx.font="600 15px Georgia,serif"; ctx.fillText("RLCF crew · steal the crown of Fenn",W/2,H*0.62);
+    // option tick — boost vertical (down) control sensitivity
+    var vr=vsBoxRect(), bs=26, bxx=vr.x+14, byy=vr.y+(vr.h-bs)/2;
+    ctx.fillStyle=downBoost?INK:"#ece6d4"; ctx.fillRect(bxx,byy,bs,bs); Sk.begin(2.4,INK); Sk.rect(bxx,byy,bs,bs,55);
+    if(downBoost){ ctx.strokeStyle=PAPER; ctx.lineWidth=3.4; ctx.lineCap="round"; ctx.beginPath(); ctx.moveTo(bxx+5,byy+13); ctx.lineTo(bxx+11,byy+19); ctx.lineTo(bxx+22,byy+6); ctx.stroke(); ctx.lineWidth=1; }
+    ctx.fillStyle=INK; ctx.font="700 15px Georgia,serif"; ctx.textAlign="left"; ctx.fillText("More sensitive up/down control",bxx+bs+12,byy+18);
+    ctx.textAlign="left"; vignette();
+    ctx.fillStyle=INK2; ctx.font="700 14px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText(VERSION,18,30); }
+  function drawCrown2D(x,y,r,opts){ opts=opts||{};
+    var cap=opts.cap||"#efe6c9", gem=opts.gem===undefined?RED:opts.gem, gemA=opts.gemA==null?1:opts.gemA;
+    // velvet cap + band base
+    Sk.fillPoly([[x-r,y+r*0.5],[x+r,y+r*0.5],[x+r*0.92,y-r*0.1],[x-r*0.92,y-r*0.1]],cap,90);
+    // arches rising to centre
+    Sk.begin(1.6,INK);
+    function arch(x1){ ctx.beginPath(); var sx=x+x1, ex=x; var cpx=x+x1*0.5, cpy=y-r*1.0;
+      ctx.moveTo(sx+jit(sx,y,90,1),y-r*0.05); ctx.quadraticCurveTo(cpx,cpy,ex,y-r*0.8); ctx.stroke(); }
+    arch(-r*0.9); arch(-r*0.45); arch(r*0.45); arch(r*0.9);
+    // band outline
+    Sk.poly([[x-r,y+r*0.5],[x+r,y+r*0.5],[x+r*0.92,y-r*0.1],[x-r*0.92,y-r*0.1]],true,90);
+    // pearl row along base
+    Sk.begin(1.2,INK2); for(var i=-4;i<=4;i++){ Sk.circle(x+i*r*0.22, y+r*0.45, r*0.06, 95+i); }
+    // gems on the band
+    if(gem){ ctx.save(); ctx.globalAlpha=gemA;
+      Sk.fillCircle(x,y+r*0.2,r*0.14,gem,96); Sk.fillCircle(x-r*0.5,y+r*0.22,r*0.1,gem,97); Sk.fillCircle(x+r*0.5,y+r*0.22,r*0.1,gem,98);
+      ctx.restore();
+    } else { // bare settings (empty sockets)
+      Sk.begin(1.4,INK2); Sk.circle(x,y+r*0.2,r*0.13,96); Sk.circle(x-r*0.5,y+r*0.22,r*0.09,97); Sk.circle(x+r*0.5,y+r*0.22,r*0.09,98);
+    }
+    // orb + cross finial
+    Sk.begin(1.6,INK); Sk.circle(x,y-r*0.88,r*0.14,99);
+    Sk.line(x,y-r*1.02,x,y-r*1.45,100); Sk.line(x-r*0.16,y-r*1.28,x+r*0.16,y-r*1.28,101);
+  }
+
+  // ---- FIELD (persistent map + heist beats) ----
+  // beats: 0 arrival, 1 hacker->vent (Leerson), 2 thieves->forced entry (Concourse), 3 escape->monument
+  function initField(){ beat=0; st=0; security={laser:true,alarm:true,barrier:true}; buildBuildingCol(); leerEntered=false; concEntered=false;
+    var ax=CONC.x-30, ay=CONC.y+CONC.h+60;
+    crew=[{x:ax,y:ay},{x:ax+26,y:ay+14},{x:ax-22,y:ay+22}];
+    cam.x=ax; cam.y=ay-40; setObj("The RLCF crew arrive","Split up — hacker to the vent, crew to forced entry"); startEl.style.display="block"; startEl.textContent="Skip ▸"; }
+  function startHackerBeat(){ beat=1; actor.x=LEER.x+LEER.w*0.5; actor.y=LEER.y+LEER.h+50; actor.fem=false; cam.x=actor.x; cam.y=actor.y;
+    joyEnabled=true; initGarden(); setObj("You — the hacker","Slip through the walled garden to the vent — mind the patrol"); startEl.style.display="none"; }
+  function startThiefBeat(){ beat=2; actor.x=CONC.x-20; actor.y=CONC.y+CONC.h+60; actor.fem=false;
+    partner.x=actor.x+22; partner.y=actor.y+12; cam.x=actor.x; cam.y=actor.y; joyEnabled=true;
+    setObj("The crew — break in","Force entry at the Main Concourse"); }
+  function startEscapeBeat(){ beat=3; cam.x=actor.x; cam.y=actor.y; escapeStart={x:actor.x,y:actor.y};
+    setupEscape(); setObj("Escape!","Slip past the sentries into the pentagon gate"); doFlash("#fff7cf"); }
+
+  // ---- escape peril ----
+  var escapeStart={x:0,y:0}, holes=[], crates=[], guards=[], caughtFlash=0;
+  // pentagon wall around the Tiskin Monument — open only at the BOTTOM (south)
+  var pentaVerts=[[120,-605],[248,-512],[199,-361],[41,-361],[-8,-512]]; // top, UR, LR, LL, UL
+  var pentaWalls=[], pentaGate={x:120,y:-361};
+  function buildPentagon(){ pentaWalls=[];
+    function seg(a,b){ var d=Math.hypot(b[0]-a[0],b[1]-a[1]),n=Math.ceil(d/20),k; for(k=0;k<=n;k++){ var t=k/n; pentaWalls.push({x:a[0]+(b[0]-a[0])*t,y:a[1]+(b[1]-a[1])*t,w:20,h:20}); } }
+    var V=pentaVerts; seg(V[0],V[1]); seg(V[1],V[2]); seg(V[0],V[4]); seg(V[4],V[3]); } // bottom edge V[2]-V[3] left OPEN
+  function drawPentagon(){ var V=pentaVerts.map(function(p){return w2s(p[0],p[1]);}), e=[[0,1],[1,2],[0,4],[4,3]];
+    Sk.begin(7,GRASS_DK); for(var i=0;i<e.length;i++) Sk.line(V[e[i][0]].x,V[e[i][0]].y,V[e[i][1]].x,V[e[i][1]].y,410+i);
+    Sk.begin(2.4,INK);   for(i=0;i<e.length;i++) Sk.line(V[e[i][0]].x,V[e[i][0]].y,V[e[i][1]].x,V[e[i][1]].y,420+i);
+    var g=w2s(pentaGate.x,pentaGate.y+8); ctx.fillStyle=RED; ctx.font="700 11px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText("the gate",g.x,g.y+4); ctx.textAlign="left"; }
+  function setupEscape(){
+    // route runs north from the buildings to the monument (120,-470)
+    holes=[{x:60,y:0,r:34},{x:180,y:-150,r:30},{x:10,y:-250,r:36},{x:215,y:-322,r:28},{x:-20,y:-330,r:30}];
+    crates=[{x:90,y:-70,w:54,h:34},{x:-30,y:-190,w:44,h:44},{x:150,y:-290,w:50,h:32},{x:40,y:-330,w:42,h:28}];
+    buildPentagon();
+    guards=[
+      {ax:-40,ay:-110,bx:210,by:-110,t:0,dir:1,x:-40,y:-110,fx:1,fy:0,chase:false},
+      {ax:70,ay:-200,bx:70,by:-300,t:0,dir:1,x:70,y:-200,fx:0,fy:-1,chase:false},
+      {ax:40,ay:-392,bx:202,by:-392,t:0,dir:1,x:40,y:-392,fx:1,fy:0,chase:false}   // sentry across the pentagon gate
+    ];
+  }
+  function resolveRect2D(px,py,r,o){ var cx=Math.max(o.x-o.w/2,Math.min(px,o.x+o.w/2)),cy=Math.max(o.y-o.h/2,Math.min(py,o.y+o.h/2));
+    var dx=px-cx,dy=py-cy,d2=dx*dx+dy*dy; if(d2<r*r){ if(d2>0.01){var d=Math.sqrt(d2),pu=r-d;px+=dx/d*pu;py+=dy/d*pu;}
+    else{ var l=px-(o.x-o.w/2),rt=(o.x+o.w/2)-px,t=py-(o.y-o.h/2),bt=(o.y+o.h/2)-py,m=Math.min(l,rt,t,bt);
+      if(m===l)px=o.x-o.w/2-r;else if(m===rt)px=o.x+o.w/2+r;else if(m===t)py=o.y-o.h/2-r;else py=o.y+o.h/2+r;} } return {x:px,y:py}; }
+  function retryEscape(){ actor.x=escapeStart.x; actor.y=escapeStart.y; partner.x=actor.x+22; partner.y=actor.y+12; cam.x=actor.x; cam.y=actor.y; setupEscape(); joyEnabled=true; setObj("Escape!","Dodge the guards & pits — reach the monument"); }
+  function caughtEscape(msg){ captureFail(retryEscape,msg||"A guard grabbed you!"); }
+  function updateEscapeHazards(dt){
+    // crates + pentagon walls block movement
+    for(var i=0;i<crates.length;i++){ var p=resolveRect2D(actor.x,actor.y,actor.r||15,crates[i]); actor.x=p.x; actor.y=p.y; }
+    for(i=0;i<pentaWalls.length;i++){ var pw=resolveRect2D(actor.x,actor.y,actor.r||15,pentaWalls[i]); actor.x=pw.x; actor.y=pw.y; }
+    // pits
+    for(i=0;i<holes.length;i++){ if(Math.hypot(actor.x-holes[i].x,actor.y-holes[i].y)<holes[i].r*0.7){ caughtEscape("You fell in a pit!"); return; } }
+    // guards
+    for(i=0;i<guards.length;i++){ var g=guards[i];
+      var tpx=actor.x-g.x, tpy=actor.y-g.y, dToP=Math.hypot(tpx,tpy)||1;
+      var inCone = dToP<(g.chase?165:130) && (tpx*g.fx+tpy*g.fy)/dToP > 0.84;   // only see you within the torch beam
+      g.chase = inCone;
+      if(g.chase){ g.x+=tpx/dToP*130*dt; g.y+=tpy/dToP*130*dt; g.fx=tpx/dToP; g.fy=tpy/dToP; }
+      else { // patrol a<->b
+        var tx=g.dir>0?g.bx:g.ax, ty=g.dir>0?g.by:g.ay; var dx2=tx-g.x,dy2=ty-g.y,d2=Math.hypot(dx2,dy2);
+        if(d2<4){ g.dir*=-1; } else { g.x+=dx2/d2*70*dt; g.y+=dy2/d2*70*dt; g.fx=dx2/d2; g.fy=dy2/d2; } }
+      // guards can't walk through solid walls / crates
+      var wq; for(wq=0;wq<buildingsCol.length;wq++){ var gp=resolveRect2D(g.x,g.y,16,buildingsCol[wq]); g.x=gp.x; g.y=gp.y; }
+      for(wq=0;wq<pentaWalls.length;wq++){ var gp2=resolveRect2D(g.x,g.y,16,pentaWalls[wq]); g.x=gp2.x; g.y=gp2.y; }
+      for(wq=0;wq<crates.length;wq++){ var gp3=resolveRect2D(g.x,g.y,16,crates[wq]); g.x=gp3.x; g.y=gp3.y; }
+      if(Math.hypot(actor.x-g.x,actor.y-g.y)<24){ caughtEscape("A guard grabbed you!"); return; }
+    }
+    if(caughtFlash>0) caughtFlash=Math.max(0,caughtFlash-dt*2);
+  }
+  function drawHole(h){ var s=w2s(h.x,h.y); ctx.save(); ctx.beginPath(); ctx.ellipse(s.x,s.y,h.r,h.r*0.7,0,0,Math.PI*2); ctx.clip();
+    ctx.fillStyle="#2c281e"; ctx.fillRect(s.x-h.r,s.y-h.r,h.r*2,h.r*2); Sk.begin(1.0,"#0f0d09"); ctx.globalAlpha=0.6;
+    for(var d=-h.r;d<h.r;d+=5) rawline(s.x-h.r+d,s.y+h.r,s.x-h.r+d+h.r,s.y-h.r,(h.x|0)+d,1.2); ctx.globalAlpha=1; ctx.restore();
+    Sk.begin(2.0,INK); ctx.beginPath(); ctx.ellipse(s.x,s.y,h.r,h.r*0.7,0,0,Math.PI*2); ctx.stroke(); }
+  function drawCrate(c){ var s=w2s(c.x,c.y); Sk.fillPoly([[s.x-c.w/2,s.y-c.h/2],[s.x+c.w/2,s.y-c.h/2],[s.x+c.w/2,s.y+c.h/2],[s.x-c.w/2,s.y+c.h/2]],"#cdbf9c",(c.x|0));
+    Sk.begin(2.2,INK); Sk.rect(s.x-c.w/2,s.y-c.h/2,c.w,c.h,(c.x|0));
+    Sk.begin(1.3,INK2); var ph=c.h/3; Sk.line(s.x-c.w/2,s.y-c.h/2+ph,s.x+c.w/2,s.y-c.h/2+ph,(c.x|0)+2); Sk.line(s.x-c.w/2,s.y-c.h/2+2*ph,s.x+c.w/2,s.y-c.h/2+2*ph,(c.x|0)+3); }
+  function drawGuard(g){ var s=w2s(g.x,g.y);
+    // vision cone
+    var ang=Math.atan2(g.fy,g.fx), spread=0.57, len=g.chase?165:130;
+    ctx.fillStyle=g.chase?"rgba(158,36,28,0.16)":"rgba(70,64,47,0.12)"; ctx.beginPath(); ctx.moveTo(s.x,s.y);
+    ctx.arc(s.x,s.y,len,ang-spread,ang+spread); ctx.closePath(); ctx.fill();
+    drawPerson(s.x,s.y,{s:0.95,phase:boilT*7,amp:0.6,col:g.chase?RED:INK});
+    if(g.chase){ ctx.fillStyle=RED; ctx.font="700 16px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText("!",s.x,s.y-46); ctx.textAlign="left"; } }
+  function updateField(dt){
+    if(captured) return;
+    if(beat===0){ st+=dt;
+      crew.forEach(function(c,i){ var tx=CONC.x-20+i*10, ty=CONC.y+CONC.h+26; var dx=tx-c.x,dy=ty-c.y,d=Math.hypot(dx,dy);
+        if(d>2){ c.x+=dx/d*Math.min(d,90*dt); c.y+=dy/d*Math.min(d,90*dt);} });
+      if(st>3.6||tap){ tap=false; startHackerBeat(); }
+    } else if(beat===1){ moveActor(dt); updateGarden(dt);
+      if(near(actor.x,actor.y,ventPt.x,ventPt.y,40)){ scene3d.id="secBack"; openScene("secBack"); }
+    } else if(beat===2){ moveActor(dt);
+      var dx=actor.x-partner.x,dy=actor.y-partner.y,d=Math.hypot(dx,dy); if(d>30){ partner.x+=dx/d*Math.min(d-26,ACT*dt); partner.y+=dy/d*Math.min(d-26,ACT*dt);}
+      if(near(actor.x,actor.y,forcedPt.x,forcedPt.y,46)){ scene3d.id="heistInside"; openScene("heistInside"); }
+    } else if(beat===3){ moveActor(dt);
+      updateEscapeHazards(dt);
+      var dx2=actor.x-partner.x,dy2=actor.y-partner.y,d2=Math.hypot(dx2,dy2); if(d2>30){ partner.x+=dx2/d2*Math.min(d2-26,ACT*dt); partner.y+=dy2/d2*Math.min(d2-26,ACT*dt);}
+      if(near(actor.x,actor.y,pentaGate.x,pentaGate.y-6,44)){ scene3d.id="getaway"; openScene("getaway"); }
+    }
+  }
+  function renderField(){
+    drawMap();
+    if(beat===3){ drawPentagon(); for(var hi=0;hi<holes.length;hi++) drawHole(holes[hi]); for(var ci=0;ci<crates.length;ci++) drawCrate(crates[ci]); for(var gi=0;gi<guards.length;gi++) drawGuard(guards[gi]); }
+    if(beat===0){ for(var i=0;i<crew.length;i++){ var s=w2s(crew[i].x,crew[i].y); drawPerson(s.x,s.y,{s:0.9,phase:boilT*8+i,amp:1,fem:i===1}); } setSub("The museum sleeps. Tonight the crown changes hands…"); }
+    else { var s=w2s(actor.x,actor.y); 
+      if(beat>=2){ var ps=w2s(partner.x,partner.y); drawPerson(ps.x,ps.y,{fem:true,phase:boilT*7,amp:0.7}); }
+      drawPerson(s.x,s.y,{phase:actor.phase,amp:Math.min(1,actor.speed/ACT)});
+      if(beat===1){ drawWaypoint(ventPt.x,ventPt.y,"vent"); if(gardenGuard) drawGuard(gardenGuard); }
+      else if(beat===2) drawWaypoint(forcedPt.x,forcedPt.y,"forced entry");
+      else if(beat===3){ drawWaypoint(pentaGate.x,pentaGate.y-6,"the gate"); }
+      if(crownTaken){ var c=w2s(actor.x,actor.y-30); drawCrown2D(c.x,c.y,11); }
+    }
+    // tree canopies drawn ON TOP — the player walks under them; outline shows through
+    drawTrees(0.82);
+    if(beat!==0 && underTree(actor.x,actor.y)){ var sa=w2s(actor.x,actor.y); ctx.save(); ctx.globalAlpha=0.92; drawPerson(sa.x,sa.y,{phase:actor.phase,amp:Math.min(1,actor.speed/ACT)}); ctx.restore(); }
+    if(caughtFlash>0){ ctx.fillStyle="rgba(158,36,28,"+(caughtFlash*0.35)+")"; ctx.fillRect(0,0,W,H); }
+    drawCaptureOverlay();
+    frameBorder();
+  }
+
+  // ============================================================ PUZZLES (canvas overlays)
+  var puz=null, captured=false, captureMsg="";
+  function captureFail(retryFn,msg){ captured=true; captureMsg=msg||"Caught by security!"; puz=null; doFlash("#e8b4a4");
+    joyEnabled=false; hideJoy(); clearButtons(); actionEl.style.display="none";
+    addButton("↻ Retry",function(){ tap=false; captured=false; clearButtons(); retryFn(); }); }
+  function drawCaptureOverlay(){ if(!captured)return; ctx.fillStyle="rgba(18,14,10,0.66)"; ctx.fillRect(0,0,W,H);
+    ctx.textAlign="center"; ctx.fillStyle=RED; ctx.font="900 46px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText("CAUGHT!",W/2,H*0.38);
+    ctx.fillStyle=PAPER; ctx.font="700 18px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText(captureMsg,W/2,H*0.38+34); ctx.textAlign="left"; }
+  function puzPanel(title,sub){ ctx.fillStyle="rgba(18,15,11,0.78)"; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle="#e9e2cf"; ctx.fillRect(W*0.06,H*0.12,W*0.88,H*0.76);
+    Sk.begin(3,INK); Sk.rect(W*0.06,H*0.12,W*0.88,H*0.76,1);
+    Sk.hatch(W*0.06,H*0.12,W*0.88,18,0.5,2);
+    ctx.fillStyle=INK; ctx.textAlign="center"; ctx.font="800 24px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText(title,W/2,H*0.19);
+    if(sub){ ctx.fillStyle=INK2; ctx.font="700 14px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText(sub,W/2,H*0.19+22); } ctx.textAlign="left"; }
+  function randLetters(incl,n){ var pool="ABCDEFGHIJKLMNOPQRSTUVWXYZ".split(""), out=[incl];
+    while(out.length<n){ var c=pool[Math.floor(Math.random()*26)]; if(out.indexOf(c)<0)out.push(c); }
+    for(var i=out.length-1;i>0;i--){ var j=Math.floor(Math.random()*(i+1)),t=out[i];out[i]=out[j];out[j]=t; } return out; }
+
+  var Puz={};
+  // ---- Cryptex: spell 3 words on rotating 6-letter wheels within a time limit ----
+  Puz.cryptex=function(words,secs,onSolve,onFail){
+    var MONO="'Courier New','DejaVu Sans Mono',monospace", N=words[0].length, AZ="ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+    var wheels=[]; for(var i=0;i<N;i++){
+      var need=[]; words.forEach(function(w){ if(need.indexOf(w[i])<0)need.push(w[i]); });
+      var set=need.slice(); while(set.length<6){ var c=AZ[Math.floor(Math.random()*26)]; if(set.indexOf(c)<0)set.push(c); }
+      for(var s=set.length-1;s>0;s--){ var j=Math.floor(Math.random()*(s+1)),tt=set[s];set[s]=set[j];set[j]=tt; }
+      wheels.push({set:set, idx:Math.floor(Math.random()*set.length), spin:0});
+    }
+    var found=words.map(function(){return false;}), t=secs, done=false, flash=0, flashK=-1;
+    function current(){ return wheels.map(function(w){return w.set[w.idx];}).join(""); }
+    function check(){ var cur=current(); for(var k=0;k<words.length;k++){ if(!found[k]&&words[k]===cur){ found[k]=true; flash=1; flashK=k;
+      if(found.every(function(f){return f;})){ done=true; setTimeout(onSolve,260);} return; } } }
+    function lay(){ var ww=Math.min(60,(W*0.84)/N), gap=ww*0.18, wh=ww*1.95, totW=N*ww+(N-1)*gap, x0=(W-totW)/2, y0=H*0.42; return {ww:ww,gap:gap,wh:wh,x0:x0,y0:y0}; }
+    return {
+      update:function(dt){ if(!done){ t-=dt; if(t<=0){ done=true; onFail(); return; } }
+        if(flash>0)flash=Math.max(0,flash-dt*1.4);
+        for(var i=0;i<wheels.length;i++){ var w=wheels[i]; if(w.spin!==0){ w.spin*=(1-Math.min(1,14*dt)); if(Math.abs(w.spin)<0.02)w.spin=0; } } },
+      hit:function(cx,cy){ if(done)return; var L=lay();
+        for(var i=0;i<wheels.length;i++){ var rx=L.x0+i*(L.ww+L.gap);
+          if(cx>=rx&&cx<=rx+L.ww&&cy>=L.y0&&cy<=L.y0+L.wh){ var w=wheels[i];
+            if(cy<L.y0+L.wh/2){ w.idx=(w.idx+1)%w.set.length; w.spin+=1; } else { w.idx=(w.idx+w.set.length-1)%w.set.length; w.spin-=1; }
+            check(); return; } } },
+      draw:function(){ puzPanel("CRYPTEX LOCK","");
+        var clues=[ {word:"ALARM",pre:"Kill the ",bold:"Alarm",post:""},
+                    {word:"LOWER",pre:"",bold:"Lower",post:" the Barrier"},
+                    {word:"LASER",pre:"Deactivate the ",bold:"Laser",post:" grid"} ];
+        ctx.fillStyle=INK2; ctx.font="14px "+MONO; ctx.textAlign="center"; ctx.fillText("spin the wheels — find all three codes",W/2,H*0.235);
+        // 3 status lamps (no words inside) — light green as each code is found
+        var bn=clues.length, bw=30, bg=22, btot=bn*bw+(bn-1)*bg, bx0=(W-btot)/2, byy=H*0.262;
+        for(var k=0;k<bn;k++){ var f=found[words.indexOf(clues[k].word)], x=bx0+k*(bw+bg);
+          ctx.fillStyle=f?"#2c7a3f":"#e7dfc9"; ctx.fillRect(x,byy,bw,bw); Sk.begin(2.4,f?"#1e5a2c":INK); Sk.rect(x,byy,bw,bw,k*5);
+          if(f){ Sk.begin(2.6,"#eef6ef"); Sk.line(x+7,byy+bw*0.55,x+bw*0.42,byy+bw-7,k+1); Sk.line(x+bw*0.42,byy+bw-7,x+bw-6,byy+7,k+2); } }
+        // timer
+        var tw=W*0.74, tx=(W-tw)/2, ty=H*0.335; ctx.fillStyle="#cdc6b2"; ctx.fillRect(tx,ty,tw,8); ctx.fillStyle=t<10?RED:INK; ctx.fillRect(tx,ty,tw*Math.max(0,t/secs),8);
+        ctx.fillStyle=t<10?RED:INK2; ctx.font="800 15px "+MONO; ctx.textAlign="right"; ctx.fillText(Math.ceil(Math.max(0,t))+"s",tx+tw,ty-5); ctx.textAlign="left";
+        // wheels (barrels) — above/below show the actual prev/next letters that rotate into place
+        var L=lay(), cyc=L.y0+L.wh/2, step=L.wh/3.4;
+        for(var i=0;i<wheels.length;i++){ var w=wheels[i], rx=L.x0+i*(L.ww+L.gap), winY=cyc-step*0.6, winH=step*1.2;
+          ctx.save(); ctx.beginPath(); ctx.rect(rx,L.y0,L.ww,L.wh); ctx.clip();
+          var g=ctx.createLinearGradient(0,L.y0,0,L.y0+L.wh);
+          g.addColorStop(0,"#b6ad93"); g.addColorStop(0.2,"#ddd5bf"); g.addColorStop(0.5,"#f5efdc"); g.addColorStop(0.8,"#ddd5bf"); g.addColorStop(1,"#b6ad93");
+          ctx.fillStyle=g; ctx.fillRect(rx,L.y0,L.ww,L.wh);
+          for(var o=-2;o<=2;o++){ var li=((w.idx+o)%w.set.length+w.set.length)%w.set.length, yy=cyc+(o+w.spin)*step, dist=Math.abs(o+w.spin);
+            if(dist>2.3)continue; var a = dist<0.5?1 : (dist<1.5?0.78:0.22), sz=L.ww*(dist<0.5?0.54:dist<1.5?0.44:0.34);
+            ctx.globalAlpha=a; ctx.fillStyle=dist<0.5?INK:INK2; ctx.font="700 "+Math.max(8,Math.floor(sz))+"px "+MONO; ctx.textAlign="center";
+            ctx.fillText(w.set[li],rx+L.ww/2,yy+sz*0.35); }
+          ctx.globalAlpha=1; ctx.restore();
+          // centre readout window
+          ctx.fillStyle="rgba(255,255,255,0.18)"; ctx.fillRect(rx+2,winY,L.ww-4,winH);
+          Sk.begin(2.2,RED); Sk.line(rx+3,winY,rx+L.ww-3,winY,i*4); Sk.line(rx+3,winY+winH,rx+L.ww-3,winY+winH,i*4+1);
+          Sk.begin(2.4,INK); Sk.rect(rx,L.y0,L.ww,L.wh,i+50);
+          Sk.begin(1,INK2); for(var rr=0;rr<7;rr++){ var ry2=L.y0+8+rr*((L.wh-16)/6); Sk.line(rx+2,ry2,rx+7,ry2,i*9+rr); Sk.line(rx+L.ww-7,ry2,rx+L.ww-2,ry2,i*9+rr+40); }
+          ctx.fillStyle=INK2; ctx.font="700 14px "+MONO; ctx.textAlign="center"; ctx.fillText("\u25B2",rx+L.ww/2,L.y0+13); ctx.fillText("\u25BC",rx+L.ww/2,L.y0+L.wh-4);
+        }
+        // clue lines underneath (code word in bold)
+        var ly=L.y0+L.wh+30, lh=24, sz2=15;
+        for(var c2=0;c2<clues.length;c2++){ var cl=clues[c2], fnd=found[words.indexOf(cl.word)], yy2=ly+c2*lh;
+          ctx.textAlign="left"; ctx.font="400 "+sz2+"px "+MONO; var wp=ctx.measureText(cl.pre).width, wq=ctx.measureText(cl.post).width;
+          ctx.font="700 "+sz2+"px "+MONO; var wb=ctx.measureText(cl.bold).width; var totw=wp+wb+wq, sx=W/2-totw/2;
+          var dim=fnd?"#2c7a3f":INK2, strong=fnd?"#1e5a2c":INK;
+          ctx.fillStyle=dim; ctx.font="400 "+sz2+"px "+MONO; ctx.fillText(cl.pre,sx,yy2);
+          ctx.fillStyle=strong; ctx.font="700 "+sz2+"px "+MONO; ctx.fillText(cl.bold,sx+wp,yy2);
+          ctx.fillStyle=dim; ctx.font="400 "+sz2+"px "+MONO; ctx.fillText(cl.post,sx+wp+wb,yy2);
+          if(fnd){ ctx.fillStyle="#2c7a3f"; ctx.font="700 "+sz2+"px "+MONO; ctx.fillText("  \u2713",sx+totw,yy2); }
+        }
+        ctx.textAlign="left"; }
+    };
+  };
+  // ---- Lights-out style logic door: make every panel lit ----
+  Puz.lights=function(title,scramble,onSolve){
+    var N=3, grid=[]; for(var i=0;i<N*N;i++)grid.push(true);
+    function tog(r,c){ [[0,0],[1,0],[-1,0],[0,1],[0,-1]].forEach(function(d){ var rr=r+d[0],cc=c+d[1]; if(rr>=0&&rr<N&&cc>=0&&cc<N)grid[rr*N+cc]=!grid[rr*N+cc]; }); }
+    var rng=(scramble*2654435761)>>>0; function rnd(){ rng=(rng*1103515245+12345)&0x7fffffff; return rng/0x7fffffff; }
+    for(var s=0;s<scramble;s++) tog(Math.floor(rnd()*N),Math.floor(rnd()*N));
+    var done=false; function solved(){ return grid.every(function(v){return v;}); }
+    function lay(){ var cell=Math.min(76,W*0.66/N), x0=(W-cell*N)/2, y0=H*0.32; return {cell:cell,x0:x0,y0:y0}; }
+    return {
+      hit:function(cx,cy){ if(done)return; var L=lay(); for(var r=0;r<N;r++)for(var c=0;c<N;c++){ var x=L.x0+c*L.cell,y=L.y0+r*L.cell;
+        if(cx>=x&&cx<=x+L.cell-8&&cy>=y&&cy<=y+L.cell-8){ tog(r,c); if(solved()){done=true;onSolve();} return; } } },
+      draw:function(){ puzPanel(title,"light every panel — taps flip neighbours"); var L=lay();
+        for(var r=0;r<N;r++)for(var c=0;c<N;c++){ var x=L.x0+c*L.cell,y=L.y0+r*L.cell,on=grid[r*N+c];
+          ctx.fillStyle=on?"#e8b54a":"#3a352a"; ctx.fillRect(x,y,L.cell-8,L.cell-8); Sk.begin(2.4,INK); Sk.rect(x,y,L.cell-8,L.cell-8,r*7+c);
+          if(on){ Sk.begin(1.4,"#b98a22"); Sk.circle(x+(L.cell-8)/2,y+(L.cell-8)/2,(L.cell-8)*0.28,r*5+c); } }
+      }
+    };
+  };
+  // ---- Electronic-lock HACK: trace each wire from its (shielded) light to its LEFT cut-point. CUT red, LEAVE green ----
+  Puz.hack=function(title,seed,onSolve,onFail){
+    var rng=(seed*2654435761)>>>0; function rnd(){ rng=(rng*1103515245+12345)&0x7fffffff; return rng/0x7fffffff; }
+    var N=5, COLS=["#c0392b","#2c6fb5","#d6a52a","#8e5fb5","#cf7a2a"];   // distinct wire colours, for tracing
+    var perm=[]; for(var i=0;i<N;i++)perm.push(i);                       // left cut-point slot per right terminal
+    for(i=N-1;i>0;i--){ var j=Math.floor(rnd()*(i+1)), t=perm[i]; perm[i]=perm[j]; perm[j]=t; }
+    var wires=[]; for(i=0;i<N;i++) wires.push({color:COLS[i], cut:rnd()>0.45, done:false, slot:perm[i]});
+    var reds=function(){return wires.filter(function(w){return w.cut;}).length;};
+    if(reds()<2){ wires[0].cut=true; wires[2].cut=true; } if(reds()>3){ wires[1].cut=false; wires[3].cut=false; }
+    var solved=false, sparkT=0, sparkX=0, sparkY=0, sparkBad=false;
+    function redsLeft(){ return wires.filter(function(w){return w.cut && !w.done;}).length; }
+    function lay(){ var pw=Math.min(W*0.92,408), x0=(W-pw)/2, y0=H*0.27, rowH=Math.min(52,(H*0.44)/N);
+      return {pw:pw,x0:x0,y0:y0,rowH:rowH, xL:x0+50, xR:x0+pw-52, glassX:x0+pw*0.60}; }
+    function leftY(L,slot){ return L.y0+slot*L.rowH+L.rowH/2; }
+    function rightY(L,i){ return L.y0+i*L.rowH+L.rowH/2; }
+    return {
+      update:function(dt){ if(sparkT>0) sparkT=Math.max(0,sparkT-dt); },
+      hit:function(cx,cy){ if(solved)return; var L=lay(); if(cx>=L.glassX) return;   // right side is behind glass
+        for(var i=0;i<N;i++){ var w=wires[i], ly=leftY(L,w.slot);
+          if(Math.abs(cy-ly)<L.rowH*0.46 && cx>L.x0+12 && cx<L.glassX){ if(w.done)return;
+            sparkX=L.xL+26; sparkY=ly;
+            if(!w.cut){ solved=true; sparkT=0.7; sparkBad=true; if(onFail)onFail(); return; }   // cut a GREEN wire → alarm
+            w.done=true; sparkT=0.5; sparkBad=false; if(redsLeft()===0){ solved=true; onSolve(); } return; } } },
+      draw:function(){ puzPanel(title,"trace each wire — CUT the red, LEAVE the green"); var L=lay();
+        ctx.fillStyle="#241f17"; ctx.fillRect(L.x0,L.y0-12,L.pw,N*L.rowH+24); Sk.begin(2.6,INK); Sk.rect(L.x0,L.y0-12,L.pw,N*L.rowH+24,71);
+        // tangled wires: left cut-point -> right terminal (straight diagonals cross by the permutation)
+        for(var i=0;i<N;i++){ var w=wires[i], lyv=leftY(L,w.slot), ryv=rightY(L,i);
+          if(w.done){ Sk.begin(6,"#544d40"); Sk.line(L.xL,lyv, L.xL+24,lyv,300+i); Sk.line(L.xL+40,lyv+(i%2?4:-4), L.xR,ryv,310+i); }
+          else { Sk.begin(6,w.color); Sk.line(L.xL,lyv, L.xR,ryv,320+i); }
+        }
+        // left CUT nodes (tappable)
+        for(i=0;i<N;i++){ var w=wires[i], lyv=leftY(L,w.slot);
+          ctx.fillStyle="#0f0c08"; ctx.fillRect(L.x0+10,lyv-13,30,26); Sk.begin(1.6,INK2); Sk.rect(L.x0+10,lyv-13,30,26,40+i);
+          if(!w.done){ Sk.begin(2.2,PAPER); Sk.line(L.x0+17,lyv-6,L.x0+27,lyv+6,50+i); Sk.line(L.x0+27,lyv-6,L.x0+17,lyv+6,51+i); } // scissors X
+        }
+        // right terminals + status LEDs (red = cut, green = leave)
+        for(i=0;i<N;i++){ var w=wires[i], ryv=rightY(L,i);
+          ctx.fillStyle="#0f0c08"; ctx.fillRect(L.xR-6,ryv-13,30,26);
+          ctx.fillStyle=w.cut?"#e0392b":"#39d36a"; ctx.beginPath(); ctx.arc(L.xR+16,ryv,6.5,0,Math.PI*2); ctx.fill();
+          ctx.strokeStyle=(w.cut?"rgba(224,57,43,0.55)":"rgba(57,211,106,0.55)"); ctx.lineWidth=2; ctx.beginPath(); ctx.arc(L.xR+16,ryv,11,0,Math.PI*2); ctx.stroke(); ctx.lineWidth=1;
+        }
+        // GLASS cover over the right side — can't cut next to the lights
+        var gx=L.glassX, gw=L.x0+L.pw-L.glassX;
+        ctx.fillStyle="rgba(150,195,215,0.15)"; ctx.fillRect(gx,L.y0-12,gw,N*L.rowH+24);
+        ctx.strokeStyle="rgba(225,242,255,0.55)"; ctx.lineWidth=2.5; ctx.strokeRect(gx+1,L.y0-11,gw-2,N*L.rowH+22); ctx.lineWidth=1;
+        Sk.begin(2,"rgba(232,246,255,0.4)"); Sk.line(gx+10,L.y0+N*L.rowH+6,gx+44,L.y0-6,360); Sk.line(gx+30,L.y0+N*L.rowH+6,gx+64,L.y0-6,361);
+        ctx.fillStyle="rgba(228,244,255,0.85)"; ctx.font="700 11px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText("SHIELDED GLASS",gx+gw/2,L.y0-2); ctx.textAlign="left";
+        if(sparkT>0){ ctx.fillStyle=sparkBad?"#ff5a3c":"#ffd27a"; for(var s=0;s<5;s++) ctx.fillRect(sparkX-8+s*5,sparkY-3+((s%2)*6-3),3,3); }
+        ctx.fillStyle=PAPER; ctx.font="700 15px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText("red wires left to cut: "+redsLeft(),W/2,L.y0+N*L.rowH+34); ctx.textAlign="left";
+      }
+    };
+  };
+  // ---- Crown release: slide 3 plates so their gaps align in the centre channel ----
+  Puz.slide=function(onSolve){
+    var P=3, CELLS=5, CENTER=2, plates=[]; for(var i=0;i<P;i++){ var o; do{o=Math.floor(Math.random()*CELLS);}while(o===CENTER); plates.push(o); }
+    var done=false; function solved(){ return plates.every(function(o){return o===CENTER;}); }
+    function lay(){ var pw=Math.min(W*0.82,320), cw=pw/CELLS, ph=cw, gap=12, x0=(W-pw)/2, y0=H*0.30; return {pw:pw,cw:cw,ph:ph,gap:gap,x0:x0,y0:y0}; }
+    return {
+      hit:function(cx,cy){ if(done)return; var L=lay(); for(var r=0;r<P;r++){ var y=L.y0+r*(L.ph+L.gap);
+        if(cy>=y&&cy<=y+L.ph){ if(cx<W/2) plates[r]=(plates[r]+CELLS-1)%CELLS; else plates[r]=(plates[r]+1)%CELLS; if(solved()){done=true;onSolve();} return; } } },
+      draw:function(){ puzPanel("RELEASE THE CROWN","slide each plate so the gaps line up"); var L=lay();
+        // crown behind, in the centre channel
+        var ccx=L.x0+CENTER*L.cw+L.cw/2, ccy=L.y0+P*(L.ph+L.gap)/2; drawCrown2D(ccx,ccy,L.cw*0.5,{cap:"#efe6c9"});
+        // centre channel guide
+        ctx.strokeStyle="rgba(158,36,28,0.5)"; ctx.setLineDash([6,5]); ctx.strokeRect(L.x0+CENTER*L.cw,L.y0-6,L.cw,P*(L.ph+L.gap)); ctx.setLineDash([]);
+        for(var r=0;r<P;r++){ var y=L.y0+r*(L.ph+L.gap); var aligned=plates[r]===CENTER;
+          if(aligned){ ctx.fillStyle="rgba(44,122,63,0.25)"; ctx.fillRect(L.x0+CENTER*L.cw,y,L.cw,L.ph); }
+          for(var c=0;c<CELLS;c++){ var x=L.x0+c*L.cw; if(c===plates[r])continue; // gap
+            ctx.fillStyle="#b9ad8e"; ctx.fillRect(x+2,y,L.cw-4,L.ph); Sk.begin(2.2,INK); Sk.rect(x+2,y,L.cw-4,L.ph,r*9+c); Sk.begin(1.3,INK2); Sk.hatch(x+5,y+4,L.cw-12,L.ph-8,0.4,r*4+c); }
+          // arrows
+          ctx.fillStyle=INK2; ctx.font="700 18px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText("‹",L.x0-14,y+L.ph*0.62); ctx.fillText("›",L.x0+L.pw+14,y+L.ph*0.62); ctx.textAlign="left";
+        }
+      }
+    };
+  };
+
+
+  function openScene(id){
+    enterStage("scene3d"); scene3d.id=id; scene3d.t=0; scene3d.done=false;
+    scene3d.barrierY=security.barrier?0:-2;
+    if(id==="secBack"){ leerEntered=true; startCryptex(); }
+    else if(id==="heistInside"){ concEntered=true; scene3d.px=0; scene3d.pz=17.5; scene3d.phase=0; scene3d.moving=0; joyEnabled=true;
+      scene3d.doorZ=[10.5,4.5]; scene3d.doorsOpen=[false,false];
+      setObj("Inside the exhibit","Down the gallery — two electronic doors bar the way"); }
+    else if(id==="getaway"){ initGetaway(); }
+  }
+  function initGetaway(){ scene3d.id="getaway"; scene3d.px=0; scene3d.pz=5; scene3d.phase=0; scene3d.moving=0; scene3d.caughtFlash=0; scene3d.reached=false; scene3d.reachT=0;
+    scene3d.carX=1.5; scene3d.carZ=-12; joyEnabled=true; scene3d.clock=3840; // wall-clock seconds (1:04:00); ticks 5x toward the 1:05 rendezvous
+    scene3d.guards=[
+      {x:-3,z:1,dir:1,spd:3.2,range:5,fx:1,fz:0,phase:0},
+      {x:4,z:-3,dir:-1,spd:3.8,range:5,fx:-1,fz:0,phase:1.5},
+      {x:-4,z:-7,dir:1,spd:3.0,range:5,fx:1,fz:0,phase:3.0}
+    ];
+    setObj("The rendezvous","Dodge the torches — reach the car"); wantedEl.style.display="block";
+  }
+  function startCryptex(){ joyEnabled=false; setObj("Cryptex lock","Spell LASER · ALARM · LOWER before the timer runs out");
+    puz=Puz.cryptex(["LASER","ALARM","LOWER"],45,function(){
+      security.laser=security.alarm=security.barrier=false; puz=null; setObj("Security down","Switch to the crew ▸");
+      clearButtons(); addButton("Switch to the crew ▸",function(){ returnToField(startThiefBeat); });
+    }, function(){ captureFail(startCryptex,"The cryptex re-locked!"); }); }
+  function startDoorPuzzle(i){ joyEnabled=false; var roman=i===0?"I":"II";
+    setObj("Closed Exhibit","Electronic Door "+roman+" — hack the lock");
+    puz=Puz.hack("ELECTRONIC DOOR "+roman, i===0?3:7, function(){ scene3d.doorsOpen[i]=true; puz=null; doFlash("#fff");
+      setObj("Closed Exhibit", i===0?"Door I bypassed — on to Door II":"Both doors open — the guards look away; take the crown"); joyEnabled=true; },
+      function(){ captureFail(function(){ startDoorPuzzle(i); }, "You cut a live wire — the alarm screams!"); }); }
+  function startCrownRelease(){ joyEnabled=false; setObj("The crown","Release it from the cradle");
+    puz=Puz.slide(function(){ crownTaken=true; puz=null; doFlash("#fff7cf"); setObj("Crown released!","Get out — back to the map");
+      clearButtons(); addButton("Escape ▸",function(){ returnToField(startEscapeBeat); }); }); }
+  function returnToField(fn){ doFlash("#fff"); stage="field"; glCanvas.style.display="none";
+    clearButtons(); actionEl.style.display="none"; timerEl.style.display="none"; barEl.style.display="none";
+    wantedEl.style.display="none"; setSub(""); joyEnabled=true; hideJoy(); fn(); }
+  function initScene3D(){ /* per-scene init handled in openScene */ }
+  function updateScene3DStage(dt){
+    if(captured) return;
+    if(puz){ if(puz.update)puz.update(dt); return; }
+    updateScene3D(dt);
+    if(scene3d.id==="heistInside"){
+      var dz=scene3d.doorZ, dop=scene3d.doorsOpen;
+      if(!dop[0] && scene3d.pz<=dz[0]+1.0){ startDoorPuzzle(0); }
+      else if(dop[0] && !dop[1] && scene3d.pz<=dz[1]+1.0){ startDoorPuzzle(1); }
+      else if(dop[0] && dop[1] && !crownTaken && near2(scene3d.px,scene3d.pz,0,0,2.0)){ startCrownRelease(); }
+    } else if(scene3d.id==="getaway"){ /* exits when the player reaches the car (see updateScene3D) */ }
+  }
+  function near2(ax,az,bx2,bz2,r){ return Math.hypot(ax-bx2,az-bz2)<r; }
+  function renderScene3DStage(){
+    renderScene3D();
+    paper(false);                                  // ALWAYS clear the ink overlay so the 3D shows (grain added inside only in sketch mode)
+    if(sketchMode){ vignette(); frameBorder(); }
+    if(scene3d.id==="secBack" && !puz && !captured){ drawShutterFrame(); }
+    if(scene3d.id==="getaway" && !puz && !captured){ setSub(scene3d.reached?"The victorious King Tiskin watches them go…":"Time it between the torches…"); if(scene3d.caughtFlash>0){ ctx.fillStyle="rgba(158,36,28,"+(scene3d.caughtFlash*0.32)+")"; ctx.fillRect(0,0,W,H); }
+      var c=scene3d.clock||3840, hh=Math.floor(c/3600), mm=Math.floor((c%3600)/60), ss=Math.floor(c%60), p2=function(n){return (n<10?"0":"")+n;};
+      ctx.textAlign="right"; ctx.fillStyle=RED;
+      ctx.font="italic 700 15px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText("White Farro · arrive 1:05",W-16,H*0.058);
+      ctx.font="700 30px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText(hh+":"+p2(mm)+":"+p2(ss),W-16,H*0.058+34); ctx.textAlign="left"; }
+    if(puz){ setSub(""); puz.draw(); }
+    drawCaptureOverlay();
+  }
+  function drawShutterFrame(){ // dark slats framing top/bottom like looking through a shutter
+    ctx.fillStyle="rgba(25,22,16,0.85)"; ctx.fillRect(0,0,W,H*0.16); ctx.fillRect(0,H*0.84,W,H*0.16);
+    Sk.begin(2,INK2); for(var i=0;i<5;i++){ Sk.line(0,H*0.16-i*8,W,H*0.16-i*8,300+i); Sk.line(0,H*0.84+i*8,W,H*0.84+i*8,320+i); }
+    ctx.fillStyle=PAPER; ctx.font="700 14px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center";
+    ctx.fillText("— through the vent, into the Closed Exhibit —",W/2,H*0.16-14); ctx.textAlign="left";
+  }
+
+  // ---- CHASE ----
+  var chase={t:0,scroll:0,px:0,vx:0,cars:[],islands:[],spawn:0,isl:0,hit:0,police:[],DUR:45,escaping:0,carScale:1,carY:0};
+  function initChase(){ setObj("Lose the police");
+    timerEl.style.display="block"; barEl.style.display="block"; wantedEl.style.display="block"; joyEnabled=true;
+    chase.t=0;chase.scroll=0;chase.px=0;chase.vx=0;chase.cars=[];chase.islands=[];chase.spawn=0;chase.isl=0;chase.hit=0;chase.escaping=0;chase.carScale=1;chase.carY=0; chase.police=[{x:-60},{x:60}]; }
+  function roadGeom(){ var rw=Math.min(W*0.8,520); return {L:W/2-rw/2,R:W/2+rw/2,w:rw,cx:W/2}; }
+  function updateChase(dt){ var g=roadGeom(); chase.scroll+=dt*320;
+    // ---- escape drive-off animation (after the countdown hits 0) ----
+    if(chase.escaping>0){ chase.escaping+=dt; chase.scroll+=dt*900; chase.carScale=Math.max(0.05,1-chase.escaping*0.5); chase.carY-=dt*230;
+      if(chase.escaping>2.4){ enterStage("complete"); } return; }
+    chase.t+=dt;
+    var iv=inputVec(); chase.vx+=(iv.x*280-chase.vx)*Math.min(1,10*dt); chase.px+=chase.vx*dt;
+    var lim=g.w/2-24; if(chase.px>lim){chase.px=lim;chase.vx=0;} if(chase.px<-lim){chase.px=-lim;chase.vx=0;}
+    var pY=H*0.74;
+    // spawn oncoming/slow cars
+    chase.spawn-=dt; if(chase.spawn<=0){ chase.spawn=0.55+Math.random()*0.5; var onR=Math.random()<0.5;
+      var x=onR?(g.w*0.12+Math.random()*g.w*0.32):(-g.w*0.44+Math.random()*g.w*0.32);
+      chase.cars.push({x:x,y:-80,oncoming:onR,spd:onR?(260+Math.random()*120):(80+Math.random()*40)}); }
+    // spawn central traffic islands / bollard-lights (so you can't camp the middle)
+    chase.isl-=dt; if(chase.isl<=0){ chase.isl=1.4+Math.random()*0.8; chase.islands.push({x:(Math.random()<0.5?-1:1)*(Math.random()*10),y:-70,light:Math.random()<0.5}); }
+    for(var i=chase.cars.length-1;i>=0;i--){ var c=chase.cars[i]; c.y+=c.spd*dt;
+      if(Math.abs((g.cx+c.x)-(g.cx+chase.px))<36 && Math.abs(c.y-pY)<46){ chase.cars.splice(i,1); chase.hit=1; chase.t=Math.max(0,chase.t-6); chase.vx*=-0.5; continue; }
+      if(c.y>H+90) chase.cars.splice(i,1); }
+    for(i=chase.islands.length-1;i>=0;i--){ var s=chase.islands[i]; s.y+=300*dt;
+      if(Math.abs((g.cx+s.x)-(g.cx+chase.px))<26 && Math.abs(s.y-pY)<40){ chase.islands.splice(i,1); chase.hit=1; chase.t=Math.max(0,chase.t-6); chase.vx*=-0.6; continue; }
+      if(s.y>H+60) chase.islands.splice(i,1); }
+    if(chase.hit>0)chase.hit=Math.max(0,chase.hit-dt*2);
+    var rem=Math.max(0,chase.DUR-chase.t); timerEl.textContent="0:"+("0"+Math.floor(rem)).slice(-2);
+    barFill.style.width=Math.min(100,(chase.t/chase.DUR)*100)+"%";
+    if(chase.t>=chase.DUR){ chase.escaping=0.0001; setObj("CLEAR!","Wheels up — lose them in the distance"); joyEnabled=false; } }
+  function carTop(x,y,w,h,col,salt,onc){ Sk.fillPoly([[x-w/2,y-h/2],[x+w/2,y-h/2],[x+w/2,y+h/2],[x-w/2,y+h/2]],PAPER,salt);
+    Sk.begin(2.2,col); Sk.rect(x-w/2,y-h/2,w,h,salt); Sk.begin(1.4,INK2); Sk.rect(x-w*0.3,y-h*0.3,w*0.6,h*0.26,salt+3); Sk.rect(x-w*0.3,y+h*0.06,w*0.6,h*0.24,salt+5);
+    if(onc){ Sk.begin(1.4,RED); Sk.line(x-9,y-h/2,x-9,y-h/2-8,salt+8); Sk.line(x+9,y-h/2,x+9,y-h/2-8,salt+9);} }
+  function drawIsland(x,y,s){ // traffic island / bollard light in the centre
+    Sk.fillPoly([[x-12,y-22],[x+12,y-22],[x+9,y+22],[x-9,y+22]],"#cdc6b2",(x|0)); Sk.begin(2.2,INK); Sk.poly([[x-12,y-22],[x+12,y-22],[x+9,y+22],[x-9,y+22]],true,(x|0));
+    Sk.begin(2,INK2); for(var k=-2;k<=2;k++) Sk.line(x-7,y+k*8,x+7,y+k*8,(x|0)+k+5);
+    if(s.light){ var on=Math.sin(boilT*8)>0; Sk.fillCircle(x,y-30,6,on?"#e8902a":INK2,(x|0)+30); }
+    else { Sk.begin(2,RED); Sk.line(x,y-22,x,y-34,(x|0)+31); Sk.fillCircle(x,y-37,4,RED,(x|0)+32); } }
+  function drawPlayerCar(x,y,vx,scale){ scale=scale||1; var w=44*scale,h=72*scale; var rattle=Math.max(-1,Math.min(1,vx/280));
+    // body (red)
+    Sk.fillPoly([[x-w/2,y-h/2],[x+w/2,y-h/2],[x+w/2,y+h/2],[x-w/2,y+h/2]],"#b32a20",810);
+    Sk.begin(2.4,INK); Sk.rect(x-w/2,y-h/2,w,h,810);
+    // windscreen
+    Sk.fillPoly([[x-w*0.32,y-h*0.36],[x+w*0.32,y-h*0.36],[x+w*0.26,y-h*0.12],[x-w*0.26,y-h*0.12]],"#cfd6d8",812);
+    if(scale>0.4){
+      // 3 stick figures + crown in the cabin, rattled by steering (shift opposite to turn)
+      var jx=-rattle*w*0.22, head=h*0.12;
+      function occ(ox,oy,col){ Sk.fillCircle(x+ox+jx,y+oy,head*0.6,"#e9dcc4",820); Sk.begin(2,col); Sk.circle(x+ox+jx,y+oy,head*0.6,821); Sk.line(x+ox+jx,y+oy+head*0.5,x+ox+jx,y+oy+head*1.4,822); }
+      occ(-w*0.22,-h*0.02,INK); occ(w*0.22,-h*0.02,INK); occ(0,h*0.16,INK);     // driver, passenger, back
+      // crown bouncing in the back
+      var cby=y+h*0.30+Math.sin(boilT*16)*2*scale;
+      drawCrown2D(x+jx*0.6, cby, 9*scale);
+    }
+    // tyre-screech marks when steering hard
+    if(Math.abs(rattle)>0.5){ Sk.begin(2,INK2); Sk.line(x-w*0.4,y+h*0.5,x-w*0.4-rattle*16,y+h*0.5+20,830); Sk.line(x+w*0.4,y+h*0.5,x+w*0.4-rattle*16,y+h*0.5+20,831); }
+  }
+  function renderChase(){ var g=roadGeom(); paper(true);
+    Sk.hatch(0,0,g.L,H,0.4,600); Sk.hatch(g.R,0,W-g.R,H,0.4,620);
+    ctx.fillStyle="#d9d4c2"; ctx.fillRect(g.L,0,g.w,H);
+    Sk.begin(3,INK); Sk.line(g.L,0,g.L,H,640); Sk.line(g.R,0,g.R,H,641);
+    Sk.begin(2,INK2); var off=chase.scroll%60; for(var y=-60+off;y<H;y+=60){ Sk.line(g.cx,y,g.cx,y+28,650+(y|0)); }
+    ctx.fillStyle=INK2; ctx.font="700 13px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText("◂ slow",g.cx-g.w*0.28,24); ctx.fillText("oncoming ▸",g.cx+g.w*0.28,24); ctx.textAlign="left";
+    for(var i=0;i<chase.islands.length;i++){ drawIsland(g.cx+chase.islands[i].x,chase.islands[i].y,chase.islands[i]); }
+    for(i=0;i<chase.cars.length;i++){ var c=chase.cars[i]; carTop(g.cx+c.x,c.y,38,62,c.oncoming?RED:INK,700+i,c.oncoming); }
+    for(i=0;i<chase.police.length;i++){ var px=g.cx+chase.police[i].x*0.6, py=H*0.9+Math.sin(boilT*4+i)*6; if(chase.escaping>0)py+=chase.escaping*180; carTop(px,py,36,60,INK,760+i,false);
+      var bl=Math.sin(boilT*10+i)>0; Sk.fillCircle(px-8,py-24,4,bl?BLUE:RED,770+i); Sk.fillCircle(px+8,py-24,4,bl?RED:BLUE,772+i); }
+    drawPlayerCar(g.cx+chase.px, H*0.74+chase.carY, chase.vx, chase.carScale);
+    // big countdown number
+    if(chase.escaping<=0){ var rem=Math.ceil(Math.max(0,chase.DUR-chase.t)); var big=rem<=10; ctx.textAlign="center";
+      ctx.fillStyle=big?RED:INK; ctx.font="900 "+(big?96:64)+"px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.globalAlpha=0.92; ctx.fillText(rem,W/2,H*0.2); ctx.globalAlpha=1;
+      ctx.fillStyle=INK2; ctx.font="700 13px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText("seconds to shake the cops",W/2,H*0.2+22); ctx.textAlign="left"; }
+    else { ctx.textAlign="center"; ctx.fillStyle=BLUE; ctx.font="900 60px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText("ESCAPED!",W/2,H*0.2); ctx.textAlign="left"; }
+    frameBorder();
+    if(chase.hit>0){ ctx.fillStyle="rgba(158,36,28,"+(chase.hit*0.4)+")"; ctx.fillRect(0,0,W,H); ctx.fillStyle=RED; ctx.font="700 30px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText("CRUNCH!",W/2,H*0.4); ctx.textAlign="left"; } }
+
+  // ---- COMPLETE (restoration sequence) ----
+  var comp={t:0};
+  function initComplete(){ comp.t=0; startEl.style.display="none"; setObj(""); }
+  function updateComplete(dt){ comp.t+=dt;
+    if(comp.t>7.0){ startEl.style.display="block"; startEl.textContent="Again?"; }
+    if(tap && comp.t>1.0){ tap=false; if(comp.t<7.0){ comp.t=7.2; } else { crownTaken=false; enterStage("title"); } } }
+  function drawPlinthCushion(cx,topY,s,a){ ctx.save(); ctx.globalAlpha=a;
+    // plinth (tapered stone pedestal)
+    Sk.fillPoly([[cx-46*s,topY+170*s],[cx+46*s,topY+170*s],[cx+30*s,topY+40*s],[cx-30*s,topY+40*s]],"#cfc9b6",500);
+    Sk.begin(2.4,INK); Sk.poly([[cx-46*s,topY+170*s],[cx+46*s,topY+170*s],[cx+30*s,topY+40*s],[cx-30*s,topY+40*s]],true,500);
+    Sk.begin(1.3,INK2); Sk.hatch(cx-30*s,topY+60*s,60*s,100*s,0.4,501);
+    // top slab
+    Sk.fillPoly([[cx-40*s,topY+44*s],[cx+40*s,topY+44*s],[cx+34*s,topY+20*s],[cx-34*s,topY+20*s]],"#ded8c5",502);
+    Sk.begin(2.2,INK); Sk.poly([[cx-40*s,topY+44*s],[cx+40*s,topY+44*s],[cx+34*s,topY+20*s],[cx-34*s,topY+20*s]],true,502);
+    // blue cushion
+    ctx.fillStyle=BLUE; ctx.beginPath(); ctx.ellipse(cx,topY+14*s,38*s,16*s,0,0,Math.PI*2); ctx.fill();
+    Sk.begin(2.2,BLUE_DK); ctx.beginPath(); ctx.ellipse(cx,topY+14*s,38*s,16*s,0,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle=BLUE_LT; ctx.beginPath(); ctx.ellipse(cx-8*s,topY+9*s,18*s,7*s,0,0,Math.PI*2); ctx.fill();
+    // gold tassels at corners
+    [[-34,18],[34,18],[-30,6],[30,6]].forEach(function(p,i){ Sk.fillCircle(cx+p[0]*s,topY+p[1]*s,4*s,GOLD,510+i); });
+    ctx.restore();
+  }
+  function renderComplete(){ paper(true); frameBorder(); var t=comp.t;
+    // group zoom-out after the crown is placed
+    var zoom = t<6.0?1 : Math.max(0.6, 1-(t-6.0)*0.34);
+    var groupY = t<6.0?0 : -(t-6.0)*40; if(groupY<-70)groupY=-70;
+    var cx=W/2, baseY=H*0.46+groupY;
+    // crown descends onto the cushion between t=4.8 and 6.0
+    var descend = Math.max(0,Math.min(1,(t-4.8)/1.2));
+    var crownY = baseY - 70*zoom + descend*70*zoom;
+    var r = 46*zoom;
+    // plinth + cushion fade/slide in from t=4.6
+    var plinthA = Math.max(0,Math.min(1,(t-4.6)/1.0));
+    if(plinthA>0) drawPlinthCushion(cx, baseY-10*zoom, zoom, plinthA);
+    // crown gem/material state
+    var opts;
+    if(t<2.6){ opts={gem:RED, gemA:Math.max(0,Math.min(1,(2.6-t)/0.9)), cap:"#efe6c9"}; if(t<1.7)opts.gemA=1; }
+    else if(t<3.4){ opts={gem:null, cap:"#efe6c9"}; }                                  // bare
+    else { var bA=Math.max(0,Math.min(1,(t-3.4)/1.2)); opts={gem:BLUE, gemA:bA, cap: bA>0.5?"#27408d":"#efe6c9"}; } // blue gems + material
+    drawCrown2D(cx, crownY, r, opts);
+    // captions
+    ctx.textAlign="center";
+    if(t<2.6){ ctx.fillStyle=INK; ctx.font="700 22px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText("The false rubies are prised out…",cx,H*0.18); }
+    else if(t<3.4){ ctx.fillStyle=INK2; ctx.font="700 22px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText("…leaving the crown bare.",cx,H*0.18); }
+    else if(t<6.0){ ctx.fillStyle=BLUE_DK; ctx.font="700 22px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText("The true sapphires are set.",cx,H*0.18); }
+    else {
+      // final: zoom out + "The True Crown / has been restored" (True in blue), two centred lines
+      var fa=Math.max(0,Math.min(1,(t-6.4)/0.8)); ctx.globalAlpha=fa;
+      var fs=30, ff=function(s){return "700 "+s+"px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif";};
+      var s1="The ", s2="True", s3=" Crown", s4="has been restored";
+      ctx.font=ff(fs);
+      while((Math.max(ctx.measureText(s1+s2+s3).width, ctx.measureText(s4).width)>W*0.86)&&fs>16){ fs-=2; ctx.font=ff(fs); }
+      var y1=H*0.75, y2=y1+fs*1.25;
+      ctx.textAlign="left";
+      var wA=ctx.measureText(s1).width, wB=ctx.measureText(s2).width, wC=ctx.measureText(s3).width;
+      var sx=cx-(wA+wB+wC)/2;
+      ctx.fillStyle=INK;  ctx.fillText(s1,sx,y1);
+      ctx.fillStyle=BLUE; ctx.fillText(s2,sx+wA,y1);
+      ctx.fillStyle=INK;  ctx.fillText(s3,sx+wA+wB,y1);
+      ctx.textAlign="center"; ctx.fillStyle=INK; ctx.fillText(s4,cx,y2);
+      ctx.globalAlpha=1;
+    }
+    ctx.textAlign="left"; vignette(); }
+
+  // ============================================================ MAIN LOOP
+  glReady=initGL(); resize();
+  enterStage("title");
+  var last=performance.now();
+  function frame(now){ var dt=Math.min((now-last)/1000,0.05); last=now;
+    boilT+=dt; if(sketchMode){ boilAcc+=dt; if(boilAcc>0.11){ boil++; boilAcc=0; } }
+    if(flash.a>0) flash.a=Math.max(0,flash.a-dt*2.2);
+    if(stage==="title"){ updateTitle(); renderTitle(); }
+    else if(stage==="field"){ updateField(dt); renderField(); }
+    else if(stage==="scene3d"){ updateScene3DStage(dt); renderScene3DStage(); }
+    else if(stage==="chase"){ updateChase(dt); renderChase(); }
+    else if(stage==="complete"){ updateComplete(dt); renderComplete(); }
+    drawFlash();
+    requestAnimationFrame(frame);
+  }
+  startEl.addEventListener("click",function(){ tap=true; if(stage==="title") beginPressed=true; });
+  requestAnimationFrame(frame);
+})();
+</script>
+<script data-goatcounter="https://s77ffy.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
