@@ -2,6 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="app-repo" content="TheFennJob">
+<meta name="app-version" content="v1.9.3">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>The Fenn Job — RLCF</title>
 <style>
@@ -56,7 +58,7 @@
 <script>
 (function(){
   "use strict";
-  var VERSION="v1.7.2";
+  var VERSION="v1.9.3";
   var glCanvas=document.getElementById("gl");
   var inkCanvas=document.getElementById("ink");
   var ctx=inkCanvas.getContext("2d");
@@ -350,7 +352,9 @@
     pine:[0.45,0.5,0.5], mtn:[0.6,0.62,0.66], body:[0.34,0.32,0.28], skin:[0.82,0.74,0.6], hair:[0.4,0.34,0.26],
     red:[0.62,0.14,0.11], wall:[0.74,0.73,0.69], floor:[0.82,0.81,0.77],
     warm:[0.80,0.62,0.26], flame:[0.88,0.5,0.16], flameLt:[0.95,0.78,0.34],
-    bronze:[0.46,0.34,0.18], bronzeDk:[0.32,0.23,0.12], bronzeLt:[0.66,0.5,0.28] };
+    bronze:[0.46,0.34,0.18], bronzeDk:[0.32,0.23,0.12], bronzeLt:[0.66,0.5,0.28],
+    marble:[0.88,0.87,0.83], marbleDk:[0.77,0.76,0.72], glass:[0.84,0.88,0.89],
+    haze:[0.71,0.73,0.78], hazeDk:[0.64,0.66,0.72], domeRed:[0.70,0.26,0.20] };
 
   // ============================================================ 3D SCENES
   var security={laser:true,alarm:true,barrier:true};
@@ -383,14 +387,66 @@
     sp( 1.55,ty+3.8,z-0.55,0.20,3.0,1.20,BZD,0,0,-0.80);
     sp( 0.72,ty+1.3,z-0.5 ,0.22,2.5,1.35,BZL,0,0,-0.32);
   }
+  // ---- The Royal Museum of the Grand City of Fenn — 3D backdrop (from the model & mural) ----
+  function drawConcourse3D(cx,cz){
+    // base tier: wavy marble front (box + rounded corner bays) with pilasters & cornice
+    bx(cx,2.2,cz,34,4.4,16,G.marble);
+    cy(cx-14,2.2,cz+7,5,4.4,5,G.marble); cy(cx+14,2.2,cz+7,5,4.4,5,G.marble);
+    cy(cx,2.2,cz+8,6,4.4,4,G.marble);
+    bx(cx,4.62,cz,35.6,0.5,17.6,G.marbleDk);
+    for(var px=-15;px<=15;px+=3){ bx(cx+px,2.2,cz+8.2,0.55,3.9,0.22,G.marbleDk); }
+    // corner glass conservatory vaults on the base roof
+    sp(cx-12.5,5.35,cz+4.2,3.3,1.4,4.8,G.glass); sp(cx+12.5,5.35,cz+4.2,3.3,1.4,4.8,G.glass);
+    sp(cx-12.5,5.35,cz-4.2,3.3,1.4,4.8,G.glass); sp(cx+12.5,5.35,cz-4.2,3.3,1.4,4.8,G.glass);
+    // central front glass dome on a colonnaded drum
+    cy(cx,5.7,cz+4,4.6,2.6,4.6,G.marble);
+    for(var k=0;k<8;k++){ var an=k*Math.PI/4; cy(cx+Math.cos(an)*4.3,5.7,cz+4+Math.sin(an)*4.3,0.34,2.6,0.34,G.marbleDk); }
+    sp(cx,7.6,cz+4,4.2,2.7,4.2,G.glass); sp(cx,9.2,cz+4,0.5,0.5,0.5,G.gold);
+    // twin cupola towers with gold spires
+    [-9,9].forEach(function(tx){ var x=cx+tx, z=cz-1;
+      cy(x,5.9,z,2.6,3.4,2.6,G.marble); cy(x,7.8,z,2.95,0.5,2.95,G.marbleDk);
+      cy(x,9.2,z,2.25,2.6,2.25,G.marble); sp(x,10.9,z,2.5,1.5,2.5,G.stone);
+      co(x,12.2,z,0.5,1.9,G.gold); sp(x,13.2,z,0.3,0.3,0.3,G.gold); });
+    // rear upper block with pilasters, cornice, red banners, and the grand red dome
+    bx(cx,7.3,cz-4,14,5.8,9,G.marble);
+    for(px=-6;px<=6;px+=2.4){ bx(cx+px,7.3,cz+0.7,0.5,5.2,0.2,G.marbleDk); }
+    bx(cx,10.3,cz-4,15.2,0.55,10.2,G.marbleDk);
+    bx(cx-5.2,7.6,cz+0.9,1.5,3.4,0.12,G.red,0,0,0,1); bx(cx+5.2,7.6,cz+0.9,1.5,3.4,0.12,G.red,0,0,0,1);
+    sp(cx,11.7,cz-4,5.3,3.3,5.3,G.domeRed);
+    for(k=0;k<6;k++){ var a2=k*Math.PI/3; bx(cx+Math.cos(a2)*3.1,11.9,cz-4+Math.sin(a2)*3.1,0.35,2.2,0.35,G.marble,0,0,Math.cos(a2)*0.45); }
+    cy(cx,14.6,cz-4,0.7,1.0,0.7,G.marble); sp(cx,15.5,cz-4,0.5,0.5,0.5,G.gold);
+    bx(cx+0.06,16.4,cz-4,1.3,0.75,0.07,G.red,0,0,0,1);   // pennant at the summit
+    // portico: stepped base, four columns, hipped canopy
+    bx(cx,0.3,cz+10.6,8,0.6,3.2,G.stoneLt); bx(cx,0.82,cz+10.1,6.6,0.5,2.5,G.stoneLt);
+    [-2.4,-0.8,0.8,2.4].forEach(function(colx){ cy(cx+colx,2.1,cz+9.6,0.27,2.7,0.27,G.marble); });
+    co(cx,3.9,cz+9.6,3.2,1.4,G.marbleDk);
+  }
+  function drawLeersonBlock3D(cx,cz){
+    bx(cx,3.2,cz,22,6.4,10,G.stone);
+    bx(cx,6.55,cz,23.2,0.55,11.2,G.stoneDk);
+    for(var px=-9;px<=9;px+=2.6){ bx(cx+px,3.2,cz+5.15,0.5,5.6,0.2,G.stoneDk); }
+    [[-10,4],[10,4],[-10,-4],[10,-4]].forEach(function(p){ bx(cx+p[0],7.4,cz+p[1],4,1.6,4,G.stone); bx(cx+p[0],8.35,cz+p[1],4.6,0.4,4.6,G.stoneDk); });
+    bx(cx,7.6,cz,7,1.7,4,G.glass);                        // roof lantern
+    bx(cx,9.3,cz,1.1,0.65,0.07,G.red,0,0,0,1);            // rooftop banner
+  }
+  function drawCityDome(x,z,s){
+    bx(x,2.2*s,z,7*s,4.4*s,6*s,G.haze); sp(x,5.4*s,z,3.1*s,2.1*s,3.1*s,G.hazeDk);
+    sp(x,7.0*s,z,0.4*s,0.4*s,0.4*s,G.haze); }
   function drawCourtyard(){
     bx(0,-0.1,-30,240,0.2,240,G.ground);
     bx(0,0.04,-24,5.6,0.06,60,G.path); bx(0,0.05,-30,14,0.05,14,G.path);
     bx(0,0.7,-37,22,1.4,0.7,G.stoneDk);
     for(var i=0;i<5;i++){ var pz=-22+i*7; [-5.6,5.6].forEach(function(px){ cy(px,0.7,pz,1.0,1.4,1.0,G.stoneDk); cy(px,1.55,pz,1.3,0.4,1.3,G.stone); co(px,1.7,pz,0.7,0.9,G.pine);}); }
+    // red banner poles flanking the approach (foreground depth)
+    [[-7.4,-19],[7.4,-19],[-7.4,-33],[7.4,-33]].forEach(function(p){ cy(p[0],2.2,p[1],0.09,4.4,0.09,G.stoneDk);
+      sp(p[0],4.5,p[1],0.14,0.14,0.14,G.gold); bx(p[0]+0.42,3.5,p[1],0.8,1.7,0.06,G.red,0,0,0,1); });
     var pines=[[-14,-26],[-18,-34],[-22,-20],[14,-26],[18,-34],[22,-20],[-26,-30],[26,-30],[0,-44],[-10,-46],[10,-46]];
     for(i=0;i<pines.length;i++){ var h=6+((i*37)%5); co(pines[i][0],h/2+0.2,pines[i][1],1.8,h,G.pine); }
-    co(-30,9,-66,16,22,G.mtn); co(2,11,-72,20,26,G.mtn); co(34,9,-64,17,22,G.mtn);
+    // the Royal Museum skyline (mid-ground) + hazy city domes + mountains (far)
+    drawConcourse3D(16,-78);
+    drawLeersonBlock3D(-30,-72);
+    drawCityDome(-54,-94,1.15); drawCityDome(50,-96,1.3); drawCityDome(-6,-100,1.0); drawCityDome(34,-90,0.85);
+    co(-38,13,-112,22,30,G.mtn); co(4,15,-120,26,34,G.mtn); co(44,13,-110,23,30,G.mtn); co(-70,11,-105,19,26,G.mtn); co(76,11,-108,20,27,G.mtn);
     drawStatue(-30);
   }
   // ---- exhibit room (used for back view + inside view) ----
@@ -475,10 +531,10 @@
     var id=scene3d.id;
     if(id==="getaway"){
       if(scene3d.reached){ var k=Math.min(1,scene3d.reachT/1.2);
-        glFrameSetup([scene3d.carX,4.0+k*2,scene3d.carZ+9-k*4],[0,3.5,-30],50,0.012);
+        glFrameSetup([scene3d.carX,4.0+k*2,scene3d.carZ+9-k*4],[0,3.5,-30],50,0.009);
         drawCourtyard(); drawGetawayCar();
       } else {
-        glFrameSetup([scene3d.px,3.4,scene3d.pz+7],[scene3d.px,1.8,scene3d.pz-6],55,0.016);
+        glFrameSetup([scene3d.px,3.4,scene3d.pz+7],[scene3d.px,1.8,scene3d.pz-6],55,0.011);
         drawCourtyard(); drawGetawayCar();
         if(scene3d.guards) for(var i=0;i<scene3d.guards.length;i++) drawGuard3D(scene3d.guards[i]);
         drawSceneActor();
@@ -537,8 +593,8 @@
 
   // ============================================================ 2D MAP (pencil top-down) — Royal Museum of Fenn
   // Leerson Hall (west building) with interior floorplan; Main Concourse (domed, east); Tiskin Park + monument (north)
-  var LEER={x:-470,y:-180,w:300,h:400};        // Leerson Hall / West Annex
-  var CONC={x:150,y:-70,w:330,h:360};          // Main Concourse (domed, east)
+  var LEER={x:-470,y:-180,w:320,h:430};        // Leerson Hall / West Annex (grand palace)
+  var CONC={x:150,y:-70,w:360,h:390};          // Main Concourse (domed, east)
   var MOON={x:-120,y:-360,w:230,h:170};        // Moonside Courtyard (open, north-centre)
   var monument={x:120,y:-470};                 // Tiskin Monument (Tiskin Park, north)
   var ventPt={x:-320,y:-440};          // roof vent at the FAR (north) end of the walled garden — hacker must cross it
@@ -570,22 +626,61 @@
 
   function path(ax,ay,bx2,by2,wd){ var p=w2s(ax,ay),q=w2s(bx2,by2); ctx.strokeStyle="#d6d0bd"; ctx.lineWidth=wd||22; ctx.lineCap="round"; ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(q.x,q.y); ctx.stroke(); }
   function room(x,y,w,h,label,salt,fill){ var a=w2s(x,y); if(fill){ ctx.fillStyle=fill; ctx.fillRect(a.x,a.y,w,h);} Sk.begin(1.8,INK); Sk.rect(a.x,a.y,w,h,salt);
-    if(label){ ctx.fillStyle=INK; ctx.font="700 10px 'Bradley Hand',-apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText(label,a.x+w/2,a.y+h/2+3); ctx.textAlign="left"; } }
-  function label(x,y,txt,col,sz){ var s=w2s(x,y); ctx.fillStyle=col||INK; ctx.font="700 "+(sz||12)+"px 'Bradley Hand',-apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.textAlign="center"; ctx.fillText(txt,s.x,s.y); ctx.textAlign="left"; }
+    if(label){ ctx.fillStyle=INK; ctx.font="700 10px Georgia,serif"; ctx.textAlign="center"; ctx.fillText(label,a.x+w/2,a.y+h/2+3); ctx.textAlign="left"; } }
+  function label(x,y,txt,col,sz){ var s=w2s(x,y); ctx.fillStyle=col||INK; ctx.font="700 "+(sz||12)+"px Georgia,serif"; ctx.textAlign="center"; ctx.fillText(txt,s.x,s.y); ctx.textAlign="left"; }
 
   var leerEntered=false, concEntered=false;
   function roofBuilding(b,name){ var a=w2s(b.x,b.y);
     ctx.save(); ctx.globalAlpha=0.3; Sk.fillPoly([[a.x+6,a.y+8],[a.x+b.w+6,a.y+8],[a.x+b.w+6,a.y+b.h+8],[a.x+6,a.y+b.h+8]],INK,(b.x|0)); ctx.restore();
     Sk.fillPoly([[a.x,a.y],[a.x+b.w,a.y],[a.x+b.w,a.y+b.h],[a.x,a.y+b.h]],ROOF,(b.x|0));
     Sk.begin(1.2,ROOF_DK); Sk.hatch(a.x+4,a.y+4,b.w-8,b.h-8,0.5,(b.x|0)+1);
-    // roof ridges
-    Sk.begin(1.6,ROOF_DK); for(var rx=a.x+24;rx<a.x+b.w-10;rx+=34) Sk.line(rx,a.y+6,rx,a.y+b.h-6,(b.x|0)+rx);
-    // window ticks round the edge
-    Sk.begin(1.4,INK2); for(var wx=a.x+14;wx<a.x+b.w-10;wx+=22){ Sk.line(wx,a.y+2,wx,a.y+8,(b.x|0)+wx); Sk.line(wx,a.y+b.h-8,wx,a.y+b.h-2,(b.x|0)+wx+1); }
-    for(var wy=a.y+14;wy<a.y+b.h-10;wy+=22){ Sk.line(a.x+2,wy,a.x+8,wy,(b.x|0)+wy); Sk.line(a.x+b.w-8,wy,a.x+b.w-2,wy,(b.x|0)+wy+1); }
     Sk.begin(2.8,INK); Sk.rect(a.x,a.y,b.w,b.h,(b.x|0));
     label(b.x+b.w/2,b.y-12,name,INK,13);
   }
+  // ---- ornate top-down roof helpers (to match the museum map) ----
+  function rShadow(a,w,h,off,salt){ ctx.save(); ctx.globalAlpha=0.30; Sk.fillPoly([[a.x+off,a.y+off],[a.x+w+off,a.y+off],[a.x+w+off,a.y+h+off],[a.x+off,a.y+h+off]],INK,salt); ctx.restore(); }
+  function rTier(a,w,h,fill,salt){ Sk.fillPoly([[a.x,a.y],[a.x+w,a.y],[a.x+w,a.y+h],[a.x,a.y+h]],fill,salt); Sk.begin(2.2,INK); Sk.rect(a.x,a.y,w,h,salt+1); }
+  function glassRoof(x,y,w,h,salt){ Sk.fillPoly([[x,y],[x+w,y],[x+w,y+h],[x,y+h]],"#dde6e6",salt);
+    Sk.begin(0.9,"#9fb1b2"); for(var gx=x+12;gx<x+w;gx+=13) Sk.line(gx,y+2,gx,y+h-2,salt+(gx|0)); for(var gy=y+12;gy<y+h;gy+=13) Sk.line(x+2,gy,x+w-2,gy,salt+(gy|0)+1);
+    Sk.begin(2.0,INK); Sk.rect(x,y,w,h,salt+2); }
+  function domeRoof(cx,cy,r,salt){ ctx.save(); ctx.globalAlpha=0.26; Sk.fillCircle(cx+7,cy+8,r+3,INK,salt); ctx.restore();
+    Sk.fillCircle(cx,cy,r+7,ROOF_DK,salt+1); Sk.begin(2.0,INK); Sk.circle(cx,cy,r+7,salt+2);       // drum
+    Sk.fillCircle(cx,cy,r,"#e8e2d0",salt+3); Sk.fillCircle(cx-r*0.3,cy-r*0.3,r*0.62,"#f2ecdb",salt+4);  // glass + highlight
+    Sk.begin(0.9,"#a7a28d"); for(var k=0;k<14;k++){ var an=k*Math.PI/7; Sk.line(cx,cy,cx+Math.cos(an)*r,cy+Math.sin(an)*r,salt+10+k); }
+    Sk.circle(cx,cy,r*0.62,salt+40); Sk.circle(cx,cy,r*0.32,salt+41); Sk.begin(2.0,INK); Sk.circle(cx,cy,r,salt+42); Sk.fillCircle(cx,cy,2.6,INK,salt+43); }
+  function cupola(cx,cy,r,salt){ ctx.save(); ctx.globalAlpha=0.30; Sk.fillCircle(cx+3,cy+4,r+1,INK,salt); ctx.restore();
+    Sk.fillCircle(cx,cy,r,ROOF,salt+1); Sk.begin(1.4,INK); Sk.circle(cx,cy,r,salt+2); Sk.fillCircle(cx,cy,r*0.42,"#efe9d8",salt+3); Sk.fillCircle(cx,cy,1.8,INK,salt+4); }
+  function archWins(x0,y0,horiz,len,n,inw,salt){ Sk.begin(1.5,INK2);
+    for(var i=0;i<n;i++){ var t=(i+0.5)/n, x=horiz?x0+len*t:x0, y=horiz?y0:y0+len*t;
+      if(horiz){ Sk.line(x-4,y+inw*3,x-4,y+inw*10,salt+i); Sk.line(x+4,y+inw*3,x+4,y+inw*10,salt+i+90); Sk.line(x-4,y+inw*3,x+4,y+inw*3,salt+i+180); }
+      else { Sk.line(x+inw*3,y-4,x+inw*10,y-4,salt+i); Sk.line(x+inw*3,y+4,x+inw*10,y+4,salt+i+90); Sk.line(x+inw*3,y-4,x+inw*3,y+4,salt+i+180); } } }
+  function steps(cx,cy,w,h,n,salt){ for(var i=0;i<n;i++){ var ww=w*(1-i*0.16); Sk.begin(1.6,INK2); Sk.rect(cx-ww/2,cy-h+i*(h/n),ww,h/n,salt+i); } }
+  function drawConcourseRoof(b){ var a=w2s(b.x,b.y);
+    rShadow(a,b.w,b.h,16,(b.x|0)); rTier(a,b.w,b.h,ROOF,(b.x|0)+2);
+    Sk.begin(1.0,ROOF_DK); Sk.hatch(a.x+4,a.y+4,b.w-8,b.h-8,0.4,(b.x|0)+5);
+    glassRoof(a.x+b.w*0.05,a.y+b.h*0.30,b.w*0.22,b.h*0.52,(b.x|0)+1200);             // conservatory wing (west)
+    domeRoof(a.x+b.w*0.55,a.y+b.h*0.43,Math.min(b.w,b.h)*0.27,(b.x|0)+1300);          // grand central glass dome
+    domeRoof(a.x+b.w*0.50,a.y+b.h*0.76,Math.min(b.w,b.h)*0.135,(b.x|0)+1500);         // secondary dome (south)
+    cupola(a.x+b.w*0.17,a.y+b.h*0.14,9,(b.x|0)+1600); cupola(a.x+b.w*0.86,a.y+b.h*0.18,8,(b.x|0)+1640);
+    cupola(a.x+b.w*0.88,a.y+b.h*0.66,8,(b.x|0)+1680);
+    archWins(a.x+22,a.y,true,b.w-44,9,1,(b.x|0)+1700); archWins(a.x+b.w,a.y+24,false,b.h-48,8,-1,(b.x|0)+1760);
+    steps(a.x+b.w*0.52,a.y+b.h+24,76,26,4,(b.x|0)+1820);                              // grand entrance steps (south)
+    for(var c=0;c<5;c++){ var px=a.x+b.w*0.52-32+c*16; Sk.fillCircle(px,a.y+b.h-12,3.4,ROOF_DK,(b.x|0)+1860+c); Sk.begin(1.3,INK); Sk.circle(px,a.y+b.h-12,3.4,(b.x|0)+1880+c); }
+    Sk.begin(3.2,INK); Sk.rect(a.x,a.y,b.w,b.h,(b.x|0)+1900);
+    label(b.x+b.w/2,b.y-14,"MAIN CONCOURSE",INK,13); }
+  function drawLeersonRoof(b){ var a=w2s(b.x,b.y);
+    rShadow(a,b.w,b.h,16,(b.x|0)); rTier(a,b.w,b.h,ROOF,(b.x|0)+2);
+    Sk.begin(1.0,ROOF_DK); Sk.hatch(a.x+4,a.y+4,b.w-8,b.h-8,0.4,(b.x|0)+5);
+    var pv=[[a.x,a.y],[a.x+b.w-46,a.y],[a.x,a.y+b.h-46],[a.x+b.w-46,a.y+b.h-46]];      // corner pavilions
+    for(var i=0;i<4;i++){ var p=pv[i]; ctx.save(); ctx.globalAlpha=0.26; Sk.fillPoly([[p[0]+6,p[1]+7],[p[0]+52,p[1]+7],[p[0]+52,p[1]+53],[p[0]+6,p[1]+53]],INK,(b.x|0)+i); ctx.restore();
+      Sk.fillPoly([[p[0],p[1]],[p[0]+46,p[1]],[p[0]+46,p[1]+46],[p[0],p[1]+46]],ROOF_DK,(b.x|0)+10+i); Sk.begin(2.0,INK); Sk.rect(p[0],p[1],46,46,(b.x|0)+20+i); }
+    glassRoof(a.x+b.w*0.35,a.y+b.h*0.40,b.w*0.30,b.h*0.20,(b.x|0)+1200);              // central roof lantern
+    archWins(a.x+58,a.y,true,b.w-116,7,1,(b.x|0)+1300); archWins(a.x+58,a.y+b.h,true,b.w-116,7,-1,(b.x|0)+1400);
+    archWins(a.x,a.y+58,false,b.h-116,8,1,(b.x|0)+1500); archWins(a.x+b.w,a.y+58,false,b.h-116,8,-1,(b.x|0)+1600);
+    steps(a.x+b.w*0.5,a.y+b.h+20,60,20,3,(b.x|0)+1700);                               // portico (south)
+    for(var c=0;c<5;c++){ var px=a.x+b.w*0.5-32+c*16; Sk.fillCircle(px,a.y+b.h-10,3,ROOF_DK,(b.x|0)+1720+c); }
+    Sk.begin(3.2,INK); Sk.rect(a.x,a.y,b.w,b.h,(b.x|0)+1900);
+    label(b.x+b.w/2,b.y-14,"LEERSON HALL",INK,13); label(b.x+b.w*0.5,b.y+b.h*0.27,"roof access",INK2,9); }
   function drawMap(){
     paper(true);
     // grass grounds (sage, matches the map) — fills the playable area; cream "page" shows outside it
@@ -601,7 +696,7 @@
     path(monument.x,monument.y, getawayCar.x+30,getawayCar.y+30);            // escape route -> getaway car
 
     // ---- Leerson Hall: closed roof, or interior floorplan once entered ----
-    if(!leerEntered){ roofBuilding(LEER,"LEERSON HALL"); }
+    if(!leerEntered){ drawLeersonRoof(LEER); }
     else {
       var L=w2s(LEER.x,LEER.y); Sk.fillPoly([[L.x,L.y],[L.x+LEER.w,L.y],[L.x+LEER.w,L.y+LEER.h],[L.x,L.y+LEER.h]],"#efe9d8",10);
       Sk.begin(2.8,INK); Sk.rect(L.x,L.y,LEER.w,LEER.h,10); label(LEER.x+LEER.w/2,LEER.y-12,"LEERSON HALL",INK,13);
@@ -614,9 +709,7 @@
     }
 
     // ---- Main Concourse: closed roof+dome, or interior once entered ----
-    if(!concEntered){ roofBuilding(CONC,"MAIN CONCOURSE");
-      var dc0=w2s(CONC.x+CONC.w/2,CONC.y+CONC.h/2); Sk.fillCircle(dc0.x,dc0.y,Math.min(CONC.w,CONC.h)*0.3,ROOF_DK,24); Sk.begin(2.2,INK); Sk.circle(dc0.x,dc0.y,Math.min(CONC.w,CONC.h)*0.3,24);
-      Sk.begin(1.2,INK2); for(var k=0;k<10;k++){ var a0=k*Math.PI/5,R0=Math.min(CONC.w,CONC.h)*0.3; Sk.line(dc0.x,dc0.y,dc0.x+Math.cos(a0)*R0,dc0.y+Math.sin(a0)*R0,25+k); }
+    if(!concEntered){ drawConcourseRoof(CONC);
     } else {
       var C=w2s(CONC.x,CONC.y); Sk.fillPoly([[C.x,C.y],[C.x+CONC.w,C.y],[C.x+CONC.w,C.y+CONC.h],[C.x,C.y+CONC.h]],"#efe9d8",20);
       Sk.begin(2.8,INK); Sk.rect(C.x,C.y,CONC.w,CONC.h,20); label(CONC.x+CONC.w/2,CONC.y-12,"MAIN CONCOURSE",INK,13);
@@ -791,7 +884,7 @@
     cam.x=ax; cam.y=ay-40; setObj("The RLCF crew arrive","Split up — hacker to the vent, crew to forced entry"); startEl.style.display="block"; startEl.textContent="Skip ▸"; }
   function startHackerBeat(){ beat=1; actor.x=LEER.x+LEER.w*0.5; actor.y=LEER.y+LEER.h+50; actor.fem=false; cam.x=actor.x; cam.y=actor.y;
     joyEnabled=true; initGarden(); setObj("You — the hacker","Slip through the walled garden to the vent — mind the patrol"); startEl.style.display="none"; }
-  function startThiefBeat(){ beat=2; actor.x=CONC.x-30; actor.y=CONC.y+CONC.h+30; actor.fem=false;
+  function startThiefBeat(){ beat=2; actor.x=CONC.x-20; actor.y=CONC.y+CONC.h+60; actor.fem=false;
     partner.x=actor.x+22; partner.y=actor.y+12; cam.x=actor.x; cam.y=actor.y; joyEnabled=true;
     setObj("The crew — break in","Force entry at the Main Concourse"); }
   function startEscapeBeat(){ beat=3; cam.x=actor.x; cam.y=actor.y; escapeStart={x:actor.x,y:actor.y};
@@ -1271,14 +1364,20 @@
     else if(t<3.4){ ctx.fillStyle=INK2; ctx.font="700 22px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText("…leaving the crown bare.",cx,H*0.18); }
     else if(t<6.0){ ctx.fillStyle=BLUE_DK; ctx.font="700 22px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif"; ctx.fillText("The true sapphires are set.",cx,H*0.18); }
     else {
-      // final: zoom out + "The True Crown has been restored" (True in blue)
-      var fa=Math.max(0,Math.min(1,(t-6.4)/0.8)); ctx.globalAlpha=fa; ctx.font="700 30px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif";
-      var s1="The ", s2="True ", s3="Crown has been restored";
-      ctx.textAlign="left"; var wA=ctx.measureText(s1).width, wB=ctx.measureText(s2).width, wC=ctx.measureText(s3).width;
-      var total=wA+wB+wC, sx=cx-total/2, ty=H*0.78;
-      ctx.fillStyle=INK; ctx.fillText(s1,sx,ty);
-      ctx.fillStyle=BLUE; ctx.fillText(s2,sx+wA,ty);
-      ctx.fillStyle=INK; ctx.fillText(s3,sx+wA+wB,ty);
+      // final: zoom out + "The True Crown / has been restored" (True in blue), two centred lines
+      var fa=Math.max(0,Math.min(1,(t-6.4)/0.8)); ctx.globalAlpha=fa;
+      var fs=30, ff=function(s){return "700 "+s+"px -apple-system,system-ui,'Helvetica Neue',Arial,sans-serif";};
+      var s1="The ", s2="True", s3=" Crown", s4="has been restored";
+      ctx.font=ff(fs);
+      while((Math.max(ctx.measureText(s1+s2+s3).width, ctx.measureText(s4).width)>W*0.86)&&fs>16){ fs-=2; ctx.font=ff(fs); }
+      var y1=H*0.75, y2=y1+fs*1.25;
+      ctx.textAlign="left";
+      var wA=ctx.measureText(s1).width, wB=ctx.measureText(s2).width, wC=ctx.measureText(s3).width;
+      var sx=cx-(wA+wB+wC)/2;
+      ctx.fillStyle=INK;  ctx.fillText(s1,sx,y1);
+      ctx.fillStyle=BLUE; ctx.fillText(s2,sx+wA,y1);
+      ctx.fillStyle=INK;  ctx.fillText(s3,sx+wA+wB,y1);
+      ctx.textAlign="center"; ctx.fillStyle=INK; ctx.fillText(s4,cx,y2);
       ctx.globalAlpha=1;
     }
     ctx.textAlign="left"; vignette(); }
@@ -1302,5 +1401,7 @@
   requestAnimationFrame(frame);
 })();
 </script>
+<script data-goatcounter="https://s77ffy.goatcounter.com/count"
+        async src="//gc.zgo.at/count.js"></script>
 </body>
 </html>
